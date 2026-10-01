@@ -12,27 +12,10 @@ PostSail（播舟）是开源的多平台内容发布与运营工具。Post 表�
 
 <img src="media/show/tkupload.gif" alt="demo" width="800"/>
 
-## 赞助商
-
-<table width="100%">
-  <tr>
-    <td width="25%" align="center" valign="middle">
-      <a href="https://api.rehat.cn/">
-        <strong>Rehat API</strong>
-      </a>
-    </td>
-    <td width="75%" align="left" valign="middle">
-      <a href="https://api.rehat.cn/">Rehat API</a>：稳定好用的 AI 大模型中转站。一套接口打通 Claude、GPT、Gemini、DeepSeek、通义等主流模型，兼容 OpenAI 协议，OpenClaw、Claude Code、Codex、Cherry Studio 等工具可直接接入。按量计费、延迟低、适合日常开发与自媒体 Agent 场景。
-      <a href="https://api.rehat.cn/">https://api.rehat.cn/</a>
-    </td>
-  </tr>
-</table>
-
 ---
 
 ## 目录
 
-- [赞助商](#赞助商)
 - [功能特性](#功能特性)
 - [架构概览](#架构概览)
 - [环境要求](#环境要求)
