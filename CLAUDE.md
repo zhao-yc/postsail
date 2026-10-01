@@ -1,114 +1,14 @@
-## Project Overview
+# 项目指引
 
-This project, `social-auto-upload`, is a powerful automation tool designed to help content creators and operators efficiently publish video content to multiple domestic and international mainstream social media platforms in one click. The project implements video upload, scheduled release and other functions for platforms such as `Douyin`, `Bilibili`, `Xiaohongshu`, `Kuaishou`, `WeChat Channel`, `Baijiahao`, `Toutiao` (今日头条), `Sohu` (搜狐号), `Zhihu` (知乎) and `TikTok`.
+PostSail（播舟）是开源的多平台内容发布与运营工具，由 Python 后端、`sau` CLI 和 Vue 管理台组成。沿用 `social-auto-upload` 分发包名及已有源码目录，维护时注意兼容已有用户。
 
-The project consists of a Python backend and a Vue.js frontend.
+开始工作前阅读 [AGENTS.md](./AGENTS.md)，遵守其中的开发原则。使用中文交流、注释和文档；账号会话、密钥、本地配置与数据库不得提交到公开仓库。
 
-**Backend:**
+- [安装与环境](./docs/install.md)：依赖、浏览器、配置和数据库初始化。
+- [CLI 使用](./docs/CLI.md)：以 `sau` 为当前命令入口。
+- [架构概览](./README.md#架构概览)：后端、前端和各业务模块的职责。
+- [文章管理](./docs/articles.md)与[平台验证记录](./docs/article-platform-verification.md)：文章接口、任务状态及实际验收范围。
+- [运营工作台](./docs/operations.md)：互动消息、回复策略、分析与周期报表。
+- [历史 Web 接口](./docs/legacy-web.md)：兼容路径和旧示例排障参考。
 
-*   Framework: Flask
-*   Core Functionality:
-    *   Handles file uploads and management.
-    *   Interacts with a SQLite database to store information about files and user accounts.
-    *   Uses `playwright` for browser automation to interact with social media platforms.
-    *   Provides a RESTful API for the frontend to consume.
-    *   Uses Server-Sent Events (SSE) for real-time communication with the frontend during the login process.
-
-**Frontend:**
-
-*   Framework: Vue.js
-*   Build Tool: Vite
-*   UI Library: Element Plus
-*   State Management: Pinia
-*   Routing: Vue Router
-*   Core Functionality:
-    *   Provides a web interface for managing social media accounts, video files, and publishing videos.
-    *   Communicates with the backend via a RESTful API.
-
-**Command-line Interface:**
-
-The project also provides a command-line interface (CLI) for users who prefer to work from the terminal. For new Douyin CLI work, prefer the `sau douyin ...` entrypoint over legacy example scripts.
-
-*   `login`: To log in to the Douyin uploader account.
-*   `check`: To verify whether the saved Douyin cookie is still valid.
-*   `upload`: To upload one video file with explicit metadata flags.
-
-## Building and Running
-
-### Backend
-
-1.  **Install dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-2.  **Install Playwright browser drivers:**
-    ```bash
-    playwright install chromium
-    ```
-
-3.  **Initialize the database:**
-    ```bash
-    python db/createTable.py
-    ```
-
-4.  **Run the backend server:**
-    ```bash
-    python sau_backend.py
-    ```
-    The backend server will start on `http://localhost:5409`.
-
-### Frontend
-
-1.  **Navigate to the frontend directory:**
-    ```bash
-    cd sau_frontend
-    ```
-
-2.  **Install dependencies:**
-    ```bash
-    npm install
-    ```
-
-3.  **Run the development server:**
-    ```bash
-    npm run dev
-    ```
-    The frontend development server will start on `http://localhost:5173`.
-
-### Command-line Interface
-
-To use the CLI, you can run the `cli_main.py` script with the appropriate arguments.
-
-**Login:**
-
-```bash
-sau douyin login --account <account_name>
-```
-
-**Check:**
-
-```bash
-sau douyin check --account <account_name>
-```
-
-**Upload:**
-
-```bash
-sau douyin upload --account <account_name> --file <video_file> --title <title> [--tags tag1,tag2] [--schedule YYYY-MM-DD HH:MM]
-```
-
-**Install bundled skill:**
-
-```bash
-sau skill install
-```
-
-## Development Conventions
-
-*   The backend code is located in the root directory and the `myUtils` and `uploader` directories.
-*   The frontend code is located in the `sau_frontend` directory.
-*   The project uses a SQLite database for data storage. The database file is located at `db/database.db`.
-*   The `conf.example.py` file should be copied to `conf.py` and configured with the appropriate settings.
-*   The `requirements.txt` file lists the Python dependencies.
-*   The `package.json` file in the `sau_frontend` directory lists the frontend dependencies.
+平台操作可参考仓库 `skills/`；`examples/` 保留单平台排障用途。实现与验证以当前代码和上述文档为准，如实说明尚未验证的平台与环境。

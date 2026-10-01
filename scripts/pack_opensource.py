@@ -34,6 +34,7 @@ SKIP_DIR_NAMES = {
     "uploadFile",
     "videoFile",
     "articleData",
+    "output",
     "logs",
     "dist",
     "build",
@@ -86,6 +87,7 @@ SKIP_PATH_REGEX = re.compile(
     r"uploadFile([/\\]|$)|"
     r"videoFile([/\\]|$)|"
     r"articleData([/\\]|$)|"
+    r"output([/\\]|$)|"
     r"logs([/\\]|$)|"
     r"\.worktrees([/\\]|$)|"
     r"\.uv-cache([/\\]|$)|"
@@ -121,8 +123,9 @@ def should_skip(path: Path) -> bool:
         return True
     if path.name in SKIP_FILE_NAMES:
         return True
-    # 公开环境配置只保留明确命名的空白示例。
-    if path.name.startswith(".env.") and path.name not in {".env.example", ".env.sample"}:
+    # 前端构建依赖已跟踪的公开默认配置，其余环境配置只保留空白示例。
+    public_frontend_env = rel in {"sau_frontend/.env.development", "sau_frontend/.env.production"}
+    if path.name.startswith(".env.") and path.name not in {".env.example", ".env.sample"} and not public_frontend_env:
         return True
     if re.search(r"\.(?:db|sqlite|sqlite3)(?:[-.]|$)", path.name, re.I):
         return True
@@ -194,6 +197,7 @@ def main() -> None:
                     "/cookies/",
                     "/cookiesfile/",
                     "/articledata/",
+                    "/output/",
                     "/database.db",
                     "/.venv/",
                     "/node_modules/",

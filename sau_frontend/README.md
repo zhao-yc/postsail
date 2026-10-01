@@ -1,8 +1,8 @@
-# Vue3 + Vite 项目
+# PostSail 网页工作台
 
 新增 `/#/messages` 消息中心与 `/#/data-center` 数据中心，原统计页保留 `/#/content-stats`。功能和验证范围见[工作台说明](../docs/operations.md)。开发代理支持 `OMNIPOST_BACKEND_URL`，生产沿用 `VITE_API_BASE_URL`。
 
-一个基于 Vue3、Vite、Element Plus、Pinia、Vue Router 和 Axios 的现代化前端项目模板。
+基于 Vue 3、Vite、Element Plus、Pinia、Vue Router 和 Axios 的 PostSail 网页工作台。
 
 当前 PostSail 已提供「文章管理」（路由 `/articles`，哈希地址 `/#/articles`）：Tiptap 富文本原稿、正文图片与封面、平台覆盖项、各账号任务记录及人工核查。百家号、知乎、今日头条、搜狐号文章仅立即发布，预览可选，定时请求明确拒绝；真实账号流程尚未验收。后端安装 `uv pip install -e ".[web]"`，浏览器和 CLI 配置见[独立多平台文章发布](../docs/articles.md)。
 
@@ -40,14 +40,16 @@ npm run preview
 src/
 ├── api/                 # API 接口
 │   ├── index.js        # API 统一导出
-│   └── user.js         # 用户相关 API
+│   └── account.js     # 平台账号 API
 ├── components/          # 公共组件
-│   └── HelloWorld.vue  # 示例组件
+│   ├── analytics/     # 分析趋势图
+│   └── stats/         # 平台统计表格
 ├── router/             # 路由配置
 │   └── index.js        # 路由主文件
 ├── stores/             # 状态管理
 │   ├── index.js        # Pinia 配置
-│   └── user.js         # 用户状态
+│   ├── account.js     # 平台账号状态
+│   └── app.js         # 应用状态
 ├── styles/             # 样式文件
 │   ├── index.scss      # 主样式文件
 │   ├── reset.scss      # 重置样式
@@ -55,7 +57,7 @@ src/
 ├── utils/              # 工具函数
 │   └── request.js      # HTTP 请求封装
 ├── views/              # 页面组件
-│   ├── Home.vue        # 首页
+│   ├── Dashboard.vue  # 工作台首页
 │   └── About.vue       # 关于页面
 ├── App.vue             # 根组件
 └── main.js             # 入口文件
@@ -65,7 +67,6 @@ src/
 
 ### 环境变量
 
-- `.env` - 通用环境变量
 - `.env.development` - 开发环境变量
 - `.env.production` - 生产环境变量
 
@@ -90,10 +91,10 @@ Axios 已经过封装，包含：
 import { http } from '@/utils/request'
 
 // GET 请求
-const data = await http.get('/api/users')
+const data = await http.get('/getAccounts')
 
 // POST 请求
-const result = await http.post('/api/users', { name: 'John' })
+const result = await http.post('/api/articles', { title: '文章标题', content: '<p>正文</p>', format: 'html' })
 ```
 
 ### 样式系统

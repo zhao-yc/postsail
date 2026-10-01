@@ -46,10 +46,11 @@ def upload_note_to_kuaishou():
     account_file = Path(BASE_DIR / "cookies" / "kuaishou_creator.json")
     account_file.parent.mkdir(exist_ok=True)
 
+    # 多图示例共用一份占位图；实际使用时替换为各张图片的路径。
     image_paths = [
         Path(BASE_DIR) / "videos/demo.png",
-        Path(BASE_DIR) / "videos/demo1.png",
-        Path(BASE_DIR) / "videos/demo2.png",
+        Path(BASE_DIR) / "videos/demo.png",
+        Path(BASE_DIR) / "videos/demo.png",
     ]
     note = "快手图文内容示例"
     tags = ["快手图文", "自动上传", "示例"]

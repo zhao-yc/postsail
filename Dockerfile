@@ -51,7 +51,7 @@ COPY . .
 
 COPY --from=builder /app/dist/index.html /app
 COPY --from=builder /app/dist/assets /app/assets
-COPY --from=builder /app/dist/vite.svg /app/assets
+COPY --from=builder /app/dist/postsail.svg /app/assets
 
 RUN cp conf.example.py conf.py
 

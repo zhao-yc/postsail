@@ -62,10 +62,11 @@ def upload_video_to_tencent_scheduled():
 
 
 def upload_note_to_tencent():
+    # 多图示例共用一份占位图；实际使用时替换为各张图片的路径。
     image_candidates = [
         Path(BASE_DIR) / "videos" / "demo.png",
-        Path(BASE_DIR) / "videos" / "demo1.png",
-        Path(BASE_DIR) / "videos" / "demo2.png",
+        Path(BASE_DIR) / "videos" / "demo.png",
+        Path(BASE_DIR) / "videos" / "demo.png",
     ]
     image_paths = [str(path) for path in image_candidates if path.exists()]
     app = TencentNote(
@@ -82,10 +83,11 @@ def upload_note_to_tencent():
 
 
 def upload_note_to_tencent_scheduled():
+    # 多图示例共用一份占位图；实际使用时替换为各张图片的路径。
     image_candidates = [
         Path(BASE_DIR) / "videos" / "demo.png",
-        Path(BASE_DIR) / "videos" / "demo1.png",
-        Path(BASE_DIR) / "videos" / "demo2.png",
+        Path(BASE_DIR) / "videos" / "demo.png",
+        Path(BASE_DIR) / "videos" / "demo.png",
     ]
     image_paths = [str(path) for path in image_candidates if path.exists()]
     publish_time = (datetime.now() + timedelta(hours=3)).replace(second=0, microsecond=0)

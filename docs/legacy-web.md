@@ -1,60 +1,33 @@
-# 历史 Web 版本说明
+# 历史 Web 接口与示例
 
-## 当前文章管理入口
+当前 Web 后端为仓库根目录的 `sau_backend.py`，管理台位于 `sau_frontend/`。安装与启动见[安装说明](./install.md)，模块职责见[架构概览](../README.md#架构概览)。原 `sau_backend/README.md` 的历史接口说明已合并至本文。
 
-`sau_backend.py` 和 `sau_frontend/` 已加入独立维护的文章流程：网页路由 `/articles`、`/api/articles` 与素材 / 发布批次 / 账号子任务 API，以及 `sau article` 客户端。该流程需要安装 `uv pip install -e ".[web]"`，使用现有 SQLite 和网页账号；完整配置及使用方法见[独立多平台文章发布](./articles.md)。
+当前文章能力、API、CLI 和任务状态见[独立多平台文章发布](./articles.md)，平台依据与实际验收范围见[平台验证记录](./article-platform-verification.md)。旧文章请求已转接任务服务，HTTP 受理不能作为平台已发表的依据。
 
-百家号、知乎、今日头条、搜狐号文章首版支持立即发布和可选预览，不支持定时。HTTP 受理和平台审核中均不能直接显示为“已发表”。四平台真实账号验收尚未完成，当前验证范围为离线和隔离流程。
+## 兼容接口索引
 
-## 历史封装与示例
+这些路径保留供已有 Web 客户端使用。以下只是排障索引；完整参数、校验和返回结果以当前 [sau_backend.py](../sau_backend.py) 为准。
 
-这套 Web 相关代码主要包括：
+| 接口 | 用途与关键参数 |
+| --- | --- |
+| `POST /upload` | 通过表单字段 `file` 上传素材，返回保存后的文件名；素材存入仓库根目录 `videoFile/`。 |
+| `GET /login` | `id` 为账号名，`type` 为平台标识；使用 SSE 推送登录进度与二维码。 |
+| `GET /getValidAccounts` | 逐个校验账号会话，返回可用状态；账号多时可能较慢。 |
+| `POST /postVideo` | 使用 JSON 的 `fileList`、`accountList`、`type`、`title`、`tags` 等字段提交发布；`tags` 为不带 `#` 的列表。 |
 
-- `sau_backend.py`
-- `sau_backend/`
-- `sau_frontend/`
+视频定时相关字段为 `enableTimer`、`videosPerDay`、`dailyTimes`、`startDays`，其组合及平台支持情况须核对当前实现。历史文档曾用 `file_list`、`account_list` 和下划线定时参数描述内部函数，不能直接作为 HTTP 请求字段。`category` 的含义也依赖平台，不能统一解释为原创标记。
 
-其中保留了项目过去阶段的封装、示例和部分文档。以下说明针对这些历史部分，不适用于上面的当前文章管理入口。
+## 数据与配置
 
-## 当前定位
+- `db/database.db`：账号与素材元数据；已有用户更新时保留数据库。
+- `cookiesFile/`：Web 账号会话；`cookies/`：CLI 与示例会话。
+- `videoFile/`：Web 上传素材；文章数据与备份要求见[文章文档](./articles.md)。
+- `conf.py`：本地配置；浏览器选择与配置示例见[安装说明](./install.md)。
 
-- 历史接口作为兼容路径保留；旧文章请求转接当前任务服务
-- 作为过去 API / Web 封装思路的参考
-- 旧示例和历史参数说明仍需按当前代码核对
-- 不承诺和当前 `uploader/`、`sau_cli.py` 的最新实现完全同步
+上述用户数据和个人配置不得提交到公开仓库。
 
-## 为什么单独拆出来说明
+## 历史示例
 
-当前工程正在整体重构，主线已经切到：
+`examples/` 保留单平台登录、上传与排障脚本，部分历史参数和平台页面行为可能落后于当前实现。新功能优先使用 [sau CLI](./CLI.md) 和对应的仓库 `skills/`，旧示例不作为当前接口契约。
 
-- `uploader/`：核心平台实现
-- `sau_cli.py`：CLI 主入口
-- `skills/`：面向 agent 的 skill
-
-文章流程在此基础上提供自己的持久化原稿与任务记录，README 介绍当前文章网页入口；其余历史示例不作为新功能的接口契约。
-
-## 如果你仍然想研究这套历史 Web 版本
-
-可以参考这些文件：
-
-- `sau_backend/README.md`
-- `sau_frontend/README.md`
-- `sau_backend.py`
-
-但请预期：
-
-- 接口契约可能与当前主线不一致
-- 平台能力覆盖可能落后于当前 `uploader/`
-- 依赖和运行方式可能需要自行排障
-
-## 当前推荐入口
-
-旧版 `examples/upload_video_to_xhs.py` 的个人账号配置 `uploader/xhs_uploader/accounts.ini` 已停止跟踪并保留在本地，公开仓库只提供空白示例。需要研究该旧流程时，先复制 `uploader/xhs_uploader/accounts.example.ini` 为同目录的 `accounts.ini`，再自行填写 Cookie；不要将账号配置提交到公开仓库。当前主线小红书功能仍优先使用 `sau xiaohongshu`。
-
-如果你要使用当前主线能力，优先看：
-
-- `uploader/`
-- `sau_cli.py`
-- `docs/CLI.md`
-- `docs/articles.md`：当前文章 Web、API 与 CLI
-- `skills/douyin-upload/SKILL.md`
+旧版 `examples/upload_video_to_xhs.py` 使用专用 API 签名流程，个人配置 `uploader/xhs_uploader/accounts.ini` 不纳入版本控制。研究该流程时，先复制 `uploader/xhs_uploader/accounts.example.ini` 为同目录的 `accounts.ini`，自行填写 Cookie；当前主线小红书入口为 `sau xiaohongshu`。

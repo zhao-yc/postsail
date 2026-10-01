@@ -114,14 +114,13 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 def custom_static(filename):
     return send_from_directory(os.path.join(current_dir, 'assets'), filename)
 
-# 处理 favicon.ico 静态资源（未来打包用）
+# 统一返回项目图标；保留旧地址兼容已缓存的页面。
 @app.route('/favicon.ico')
-def favicon():
-    return send_from_directory(os.path.join(current_dir, 'assets'), 'vite.svg')
-
+@app.route('/postsail.svg')
 @app.route('/vite.svg')
-def vite_svg():
-    return send_from_directory(os.path.join(current_dir, 'assets'), 'vite.svg')
+def favicon():
+    """容器构建只保留 PostSail 图标，三个入口共用同一静态文件。"""
+    return send_from_directory(os.path.join(current_dir, 'assets'), 'postsail.svg')
 
 # （未来打包用）
 @app.route('/')
