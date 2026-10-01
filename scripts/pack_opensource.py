@@ -27,6 +27,7 @@ SKIP_DIR_NAMES = {
     ".cursor",
     ".worktrees",
     ".learnings",
+    ".playwright-cli",
     ".uv-cache",
     "cookies",
     "cookiesFile",
