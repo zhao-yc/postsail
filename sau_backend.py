@@ -10,6 +10,7 @@ from pathlib import Path
 from queue import Queue
 from flask_cors import CORS
 from myUtils.auth import check_cookie
+from utils.platform_accounts import ACCOUNT_PLATFORMS, ARTICLE_ACCOUNT_TYPES, ARTICLE_ONLY_ACCOUNT_TYPES, resolve_account_type, validate_imported_cookie, validate_bilibili_cookie_replacement
 from utils.articles.model import ArticleError
 from utils.articles.routes import register_article_routes
 from utils.interactions.routes import register_interaction_routes
@@ -17,7 +18,7 @@ from utils.analytics.routes import register_analytics_routes
 from utils.analytics.push import register_analytics_push_routes
 from flask import Flask, request, jsonify, Response, render_template, send_from_directory
 from conf import BASE_DIR
-from myUtils.login import get_tencent_cookie, douyin_cookie_gen, get_ks_cookie, xiaohongshu_cookie_gen, baijiahao_cookie_gen, bilibili_cookie_gen, toutiao_cookie_gen, sohu_cookie_gen, zhihu_cookie_gen
+from myUtils.login import get_tencent_cookie, douyin_cookie_gen, get_ks_cookie, xiaohongshu_cookie_gen, baijiahao_cookie_gen, bilibili_cookie_gen, toutiao_cookie_gen, sohu_cookie_gen, zhihu_cookie_gen, weibo_cookie_gen, qiehao_cookie_gen
 from myUtils.postVideo import post_video_tencent, post_video_DouYin, post_video_ks, post_video_xhs, post_video_baijiahao, post_video_bilibili, post_video_toutiao, post_article_toutiao, post_article_baijiahao, post_article_sohu, post_article_zhihu
 from uploader.douyin_uploader.content_stats import (
     DouyinStatsSyncError,
@@ -472,10 +473,16 @@ def delete_account():
 # SSE 登录接口
 @app.route('/login')
 def login():
-    # 1 小红书 2 视频号 3 抖音 4 快手 5 百家号 6 B站 7 今日头条
+    # 原 1—9 类型兼容；10 微博，11 企鹅号，2 始终是微信视频号。
     type = request.args.get('type')
     # 账号名
     id = request.args.get('id')
+    try:
+        type = str(resolve_account_type(type))
+    except ValueError as exc:
+        return jsonify({"code": 400, "msg": str(exc), "data": None}), 400
+    if not isinstance(id, str) or not id.strip() or len(id) > 100:
+        return jsonify({"code": 400, "msg": "账号名称不能为空且不能超过 100 字", "data": None}), 400
     print(f"登录请求: type={type}, id={id}")
 
     # 模拟一个用于异步通信的队列
@@ -496,14 +503,29 @@ def login():
     return response
 
 def _is_article_request(data):
-    """兼容数字或字符串平台类型，搜狐和知乎始终为文章。"""
+    """按明确文章能力分派；原有视频类型默认仍走视频，文章专用类型只走文章。"""
     if not isinstance(data, dict):
         return False
     try:
         platform_type = int(data.get('type'))
     except (TypeError, ValueError):
         return False
-    return platform_type in (8, 9) or (platform_type in (5, 7) and str(data.get('contentType', '')).strip().lower() == 'article')
+    return platform_type in ARTICLE_ONLY_ACCOUNT_TYPES or (platform_type in ARTICLE_ACCOUNT_TYPES and str(data.get('contentType', '')).strip().lower() == 'article')
+
+
+def _validate_publish_capability(data):
+    """显式文章请求不可回落到视频执行器，文章专用账号也不可误发视频。"""
+    if not isinstance(data, dict):
+        raise ArticleError("发布请求必须为 JSON 对象")
+    try:
+        kind = resolve_account_type(data.get("type"))
+    except ValueError as exc:
+        raise ArticleError(str(exc)) from exc
+    mode = str(data.get("contentType") or "").strip().lower()
+    if mode == "article" and kind not in ARTICLE_ACCOUNT_TYPES:
+        raise ArticleError("该账号平台不支持统一文章发布")
+    if mode == "video" and kind in {10, 11}:
+        raise ArticleError("微博与企鹅号账号当前仅支持文章发布")
 
 
 def _submit_legacy_article(data):
@@ -523,6 +545,11 @@ def postVideo():
 
     if not data:
         return jsonify({"code": 400, "msg": "请求数据不能为空", "data": None}), 400
+
+    try:
+        _validate_publish_capability(data)
+    except ArticleError as exc:
+        return jsonify({"code": exc.status, "msg": str(exc), "data": None}), exc.status
 
     # 旧文章调用也走持久化任务；HTTP 200 仅表示受理，不再使用视频后台线程。
     if _is_article_request(data):
@@ -821,6 +848,12 @@ def postVideoBatch():
 
     if not isinstance(data_list, list):
         return jsonify({"code": 400, "msg": "Expected a JSON array", "data": None}), 400
+    # 批次先核对全部能力，避免后续条目类型错误时前面的内容已开始发送。
+    try:
+        for item in data_list:
+            _validate_publish_capability(item)
+    except ArticleError as exc:
+        return jsonify({"code": exc.status, "msg": str(exc), "data": None}), exc.status
     # 在创建任何任务之前拒绝文章定时，避免半个批次已发布才发现不支持。
     if any(_is_article_request(item) and (item.get('enableTimer') or item.get('schedule') or item.get('publish_date'))
            for item in data_list):
@@ -991,79 +1024,87 @@ def postVideoBatch():
             "data": {"batches": article_batches} if article_batches else None
         }), 200
 
-# Cookie文件上传API
+def _import_account_cookie(create_new=False):
+    """结构和真实平台会话校验通过后原子替换，失败不会损坏已有账号凭据。"""
+    temporary = None
+    try:
+        uploaded = request.files.get("file")
+        if uploaded is None or not uploaded.filename or not uploaded.filename.lower().endswith(".json"):
+            raise ValueError("请上传 JSON 格式的 Cookie 文件")
+        account_type = resolve_account_type(request.form.get("platform"))
+        root = Path(BASE_DIR / "cookiesFile").resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        database = Path(BASE_DIR / "db" / "database.db")
+        if create_new:
+            name = (request.form.get("name") or "").strip()
+            if not name or len(name) > 100:
+                raise ValueError("账号名称不能为空且不能超过 100 字")
+            destination = root / f"{ACCOUNT_PLATFORMS[account_type]}_{uuid.uuid4().hex}.json"
+        else:
+            account_id = request.form.get("id")
+            if not account_id or not account_id.isdigit():
+                raise ValueError("账号 ID 无效")
+            with sqlite3.connect(database) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute("SELECT type,filePath,userName FROM user_info WHERE id=?", (account_id,)).fetchone()
+            if row is None:
+                return jsonify({"code": 404, "msg": "账号不存在", "data": None}), 404
+            if row["type"] != account_type:
+                raise ValueError("上传平台与账号平台不一致")
+            destination = (root / row["filePath"]).resolve()
+            if not destination.is_relative_to(root) or destination == root:
+                raise ValueError("账号 Cookie 路径无效")
+            name = row["userName"]
+        raw = uploaded.stream.read(5 * 1024 * 1024 + 1)
+        if len(raw) > 5 * 1024 * 1024:
+            raise ValueError("Cookie 文件不能超过 5MB")
+        try:
+            payload = json.loads(raw.decode("utf-8-sig"))
+        except (UnicodeError, ValueError) as exc:
+            raise ValueError("Cookie 文件不是有效的 UTF-8 JSON") from exc
+        state = validate_imported_cookie(account_type, payload)
+        if account_type == 6 and not create_new:
+            validate_bilibili_cookie_replacement(destination, payload)
+        # B站保留 biliup 的原始数据，避免文章导入破坏视频 token_info 等字段。
+        saved_payload = payload if account_type == 6 else state
+        temporary = root / f".import-{uuid.uuid4().hex}.json"
+        temporary.write_text(json.dumps(saved_payload, ensure_ascii=False), encoding="utf-8")
+        temporary.chmod(0o600)
+        if not asyncio.run(check_cookie(account_type, temporary.name)):
+            raise ValueError("Cookie 登录状态校验未通过，请重新登录；浏览器依赖不可用时请检查配置")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(database) as conn:
+            if create_new:
+                cursor = conn.execute("INSERT INTO user_info(type,filePath,userName,status) VALUES(?,?,?,1)",
+                                      (account_type, destination.name, name))
+                account_id = cursor.lastrowid
+            else:
+                conn.execute("UPDATE user_info SET status=1 WHERE id=?", (account_id,))
+            # 平台校验可能耗时，落盘前再次保护期间更新的 biliup 凭据。
+            if account_type == 6 and not create_new:
+                validate_bilibili_cookie_replacement(destination, payload)
+            temporary.replace(destination)
+        return jsonify({"code": 200, "msg": "Cookie 已导入并通过登录校验", "data": {
+            "id": int(account_id), "type": account_type, "filePath": destination.name, "userName": name, "status": 1}}), 200
+    except ValueError as exc:
+        return jsonify({"code": 400, "msg": str(exc), "data": None}), 400
+    except Exception:
+        return jsonify({"code": 500, "msg": "Cookie 导入失败，请检查数据库和浏览器配置", "data": None}), 500
+    finally:
+        if temporary:
+            temporary.unlink(missing_ok=True)
+
+
 @app.route('/uploadCookie', methods=['POST'])
 def upload_cookie():
-    try:
-        if 'file' not in request.files:
-            return jsonify({
-                "code": 400,
-                "msg": "没有找到Cookie文件",
-                "data": None
-            }), 400
+    """兼容既有账号凭据替换，并校验请求平台与数据库账号类型一致。"""
+    return _import_account_cookie()
 
-        file = request.files['file']
-        if file.filename == '':
-            return jsonify({
-                "code": 400,
-                "msg": "Cookie文件名不能为空",
-                "data": None
-            }), 400
 
-        if not file.filename.endswith('.json'):
-            return jsonify({
-                "code": 400,
-                "msg": "Cookie文件必须是JSON格式",
-                "data": None
-            }), 400
-
-        # 获取账号信息
-        account_id = request.form.get('id')
-        platform = request.form.get('platform')
-
-        if not account_id or not platform:
-            return jsonify({
-                "code": 400,
-                "msg": "缺少账号ID或平台信息",
-                "data": None
-            }), 400
-
-        # 从数据库获取账号的文件路径
-        with sqlite3.connect(Path(BASE_DIR / "db" / "database.db")) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute('SELECT filePath FROM user_info WHERE id = ?', (account_id,))
-            result = cursor.fetchone()
-
-        if not result:
-            return jsonify({
-                "code": 500,
-                "msg": "账号不存在",
-                "data": None
-            }), 404
-
-        # 保存上传的Cookie文件到对应路径
-        cookie_file_path = Path(BASE_DIR / "cookiesFile" / result['filePath'])
-        cookie_file_path.parent.mkdir(parents=True, exist_ok=True)
-
-        file.save(str(cookie_file_path))
-
-        # 更新数据库中的账号信息（可选，比如更新更新时间）
-        # 这里可以根据需要添加额外的处理逻辑
-
-        return jsonify({
-            "code": 200,
-            "msg": "Cookie文件上传成功",
-            "data": None
-        }), 200
-
-    except Exception as e:
-        print(f"上传Cookie文件时出错: {str(e)}")
-        return jsonify({
-            "code": 500,
-            "msg": f"上传Cookie文件失败: {str(e)}",
-            "data": None
-        }), 500
+@app.route('/importCookie', methods=['POST'])
+def import_cookie():
+    """直接从已登录会话添加账号，支持无图形终端环境中的 Cookie 导入。"""
+    return _import_account_cookie(create_new=True)
 
 
 # Cookie文件下载API
@@ -1462,6 +1503,10 @@ def run_async_function(type,id,status_queue):
                 asyncio.set_event_loop(loop)
                 loop.run_until_complete(zhihu_cookie_gen(id, status_queue))
                 loop.close()
+            case '10':
+                asyncio.run(weibo_cookie_gen(id, status_queue))
+            case '11':
+                asyncio.run(qiehao_cookie_gen(id, status_queue))
             case _:
                 print(f"❌ 不支持的登录平台类型: {type}", flush=True)
                 status_queue.put("500")

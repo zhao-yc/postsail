@@ -13,7 +13,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .assets import ArticleAssets, utc_now
-from .model import ArticleError, PLATFORMS, clean_content, image_references
+from .model import ArticleError, PLATFORMS, clean_content, image_references, validate_options
 from .store import ArticleStore, encode
 
 BLOCK_DUPLICATES = {"queued", "running", "needs_action", "submitted", "published", "unknown"}
@@ -221,15 +221,7 @@ class ArticleService:
                 raise ArticleError(f"{rules['label']}封面超过大小限制")
             if asset["width"] <= rules["cover_min_width"] or asset["height"] <= rules["cover_min_height"]:
                 raise ArticleError(f"{rules['label']}封面尺寸必须大于 {rules['cover_min_width']}×{rules['cover_min_height']}")
-        statement = options.get("statement")
-        if statement is not None and not isinstance(statement, str):
-            raise ArticleError("创作声明必须为文本")
-        if platform == "baijiahao" and statement:
-            raise ArticleError("百家号创作声明请使用 options.ai_generated，不支持 statement 文本")
-        if platform != "baijiahao" and options.get("ai_generated"):
-            raise ArticleError("该平台 AI 创作声明请从 options.statement 选择，不能使用 ai_generated")
-        if statement and rules["statement_options"] and statement not in rules["statement_options"]:
-            raise ArticleError(f"{rules['label']}创作声明不受支持")
+        validate_options(platform, options)
         tags = effective.get("tags")
         if tags is None:
             tags = article["tags"]
@@ -358,7 +350,7 @@ class ArticleService:
         return self.get_batch(batch_id)
 
     def resolve(self, task_id, data):
-        """人工核查只能解决未知结果，不用于把失败伪装为自动发布成功。"""
+        """人工核查未知结果，或凭文章链接确认平台已受理任务公开发表。"""
         if not isinstance(data, dict):
             raise ArticleError("核查参数必须为 JSON 对象")
         resolution = data.get("resolution")
@@ -378,12 +370,22 @@ class ArticleService:
             row = conn.execute("SELECT * FROM article_publish_tasks WHERE id=?", (task_id,)).fetchone()
             if not row:
                 raise ArticleError("任务不存在", 404)
-            if row["status"] != "unknown":
-                raise ArticleError("只有结果待确认的任务可以人工核查", 409)
+            if row["status"] == "submitted":
+                # 平台已经受理，人工核查只能确认发表，不能降级后重新发送。
+                if resolution != "published":
+                    raise ArticleError("平台已受理的任务只能确认已发表，不能降级或重试", 409)
+                if not url:
+                    raise ArticleError("确认已发表须提供完整 HTTP/HTTPS 平台文章链接")
+                submit_started = row["submit_started"]
+            elif row["status"] == "unknown":
+                # 保留未知结果的既有契约：确认未发表后才能安全重试。
+                submit_started = 0 if resolution == "not_published" else 1
+            else:
+                raise ArticleError("只有结果待确认或平台已受理的任务可以人工核查", 409)
             status = "failed" if resolution == "not_published" else resolution
             conn.execute("""UPDATE article_publish_tasks SET status=?,stage='resolved',submit_started=?,message=?,
                 platform_url=?,platform_status='人工核查',updated_at=? WHERE id=?""",
-                (status, 0 if resolution == "not_published" else 1, "人工核查：" + note, url, utc_now(), task_id))
+                (status, submit_started, "人工核查：" + note, url, utc_now(), task_id))
             batch_id = row["batch_id"]
         return self.get_batch(batch_id)
 

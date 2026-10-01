@@ -115,7 +115,11 @@ class InteractionService:
         with self.store.connect() as conn:
             if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='user_info'").fetchone():
                 return {"items": []}
-            ids = [r[0] for r in conn.execute("SELECT id FROM user_info ORDER BY id")]
+            # 文章账号可能新增类型；未注册互动平台必须在列表入口过滤，避免一个新账号使旧账号列表整体失败。
+            kinds = tuple(PLATFORM_TYPES)
+            placeholders = ",".join("?" for _ in kinds)
+            ids = [r[0] for r in conn.execute(
+                f"SELECT id FROM user_info WHERE type IN ({placeholders}) ORDER BY id", kinds)]
             states = [dict(r) for r in conn.execute("SELECT * FROM interaction_sync_state")]
         settings = self.store.settings()
         items = []

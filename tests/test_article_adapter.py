@@ -8,12 +8,13 @@ from tempfile import TemporaryDirectory
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from utils.articles.adapter import (_submit_once, _selected_statement, _create_app, _verify_tags,
-                                   _verify_title, validate_task)
+                                   _verify_title, _verify_final_body, validate_task)
 from utils.articles.browser import (
     PreparationError, insert_body_images, is_uploaded_image, paste_rich_html,
     prepare_document, read_result_evidence, install_preview_guard, launch_article_browser,
     prepare_and_paste_document,
-    receipt_status, normalize_code_text,
+    receipt_status, normalize_code_text, PreparedDocument, body_sequence, _PREVIEW_GUARD,
+    install_native_preview_request_guard,
 )
 
 
@@ -236,6 +237,64 @@ class ArticleSubmissionTests(unittest.IsolatedAsyncioTestCase):
         paste.assert_awaited_once()
 
 
+class ArticleFinalBodyTests(unittest.IsolatedAsyncioTestCase):
+    """选项操作后重新校验正文，测试本身不启动浏览器或使用剪贴板。"""
+
+    async def verify_readback(self, text, sequence=None, images=None, urls=None,
+                              platform="douyin", tags=None, topics=None):
+        """仅替代浏览器读回，保持生产比较及拒绝路径不变。"""
+        urls = urls or []
+        document = PreparedDocument("<p>正文</p>", "<p>正文</p>", "正文",
+                                    [Path("photo.png")] * len(urls), [], [], urls)
+        editor = MagicMock()
+        editor.evaluate = AsyncMock(return_value=images or [])
+        editor.locator.return_value.evaluate_all = AsyncMock(return_value=topics or [])
+        with patch("utils.articles.browser.body_sequence", AsyncMock(side_effect=[text, sequence or text])), \
+                patch("utils.articles.adapter.verify_rich_structure", AsyncMock()):
+            await _verify_final_body(editor, document, platform, tags)
+
+    async def test_missing_body_is_rejected(self):
+        with self.assertRaisesRegex(PreparationError, "正文不一致"):
+            await self.verify_readback("正")
+
+    async def test_warning_after_body_is_rejected(self):
+        """平台警告出现在原正文之后时，也不能被当作允许追加的话题。"""
+        with self.assertRaises(PreparationError):
+            await self.verify_readback("正文图片上传失败，请重新上传")
+
+    async def test_only_confirmed_requested_topic_suffix_is_allowed(self):
+        """三个正文话题平台只允许真实话题节点组成的精确请求后缀。"""
+        for platform in ("baijiahao", "toutiao", "bilibili"):
+            with self.subTest(platform=platform):
+                await self.verify_readback("正文#测试##文章#", platform=platform,
+                                           tags=["测试", "文章"], topics=["#测试#", "#文章#"])
+                for text, topics in (("正文#测试##文章#警告", ["#测试#", "#文章#"]),
+                                     ("正文#测试##文章#", []),
+                                     ("正文#文章##测试#", ["#文章#", "#测试#"]),
+                                     ("正文#测试##其他#", ["#测试#", "#其他#"])):
+                    with self.assertRaises(PreparationError):
+                        await self.verify_readback(text, platform=platform,
+                                                   tags=["测试", "文章"], topics=topics)
+
+    async def test_other_platforms_do_not_allow_topic_text_suffix(self):
+        for platform in ("douyin", "zhihu", "weibo", "qiehao", "sohu"):
+            with self.subTest(platform=platform), self.assertRaises(PreparationError):
+                await self.verify_readback("正文#测试#", platform=platform,
+                                           tags=["测试"], topics=["#测试#"])
+
+    async def test_uploaded_image_order_is_rejected(self):
+        urls = ["https://p3.douyinpic.com/a.png", "https://p3.douyinpic.com/b.png"]
+        images = [dict(src=url, ready=True) for url in reversed(urls)]
+        with self.assertRaisesRegex(PreparationError, "图片地址或顺序"):
+            await self.verify_readback("正文", images=images, urls=urls)
+
+    async def test_image_moved_before_body_is_rejected(self):
+        url = "https://p3.douyinpic.com/a.png"
+        with self.assertRaisesRegex(PreparationError, "相邻段落"):
+            await self.verify_readback("正文", sequence="OMNIPOSTIMAGE0000END正文",
+                                       images=[dict(src=url, ready=True)], urls=[url])
+
+
 @unittest.skipUnless(os.environ.get("OMNIPOST_BROWSER_TESTS") == "1", "本地浏览器用例需显式启用")
 class ArticleLocalBrowserTests(unittest.IsolatedAsyncioTestCase):
     """通过受控 HTTPS 页面模拟编辑器上传，不连接任何真实平台。"""
@@ -315,6 +374,81 @@ class ArticleLocalBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("<pre", document.prepared_html)
         self.assertTrue(all(path.is_file() for path in document.image_paths))
 
+    async def test_explicit_link_text_fallback_keeps_label_format_and_url(self):
+        """抖音可选链接转换须保留加粗文字、完整地址，不改原稿。"""
+        content = '<p>查看<a href="https://example.org/a?q=1&amp;b=2"><strong>原文</strong></a></p>'
+        document = await prepare_document(self.render_page, content, {}, self.root, "sans-serif",
+                                          links_as_text=True)
+        self.assertNotIn('<a ', document.prepared_html)
+        self.assertIn('<strong>原文</strong>', document.prepared_html)
+        self.assertIn('https://example.org/a?q=1&b=2', document.expected_text)
+        self.assertIn('<a ', content)
+        unchanged = await prepare_document(self.render_page, content, {}, self.root, "sans-serif")
+        self.assertIn('<a ', unchanged.prepared_html)
+
+    async def test_douyin_picture_controls_are_excluded_without_losing_body(self):
+        """仅跳过图片节点的已知编辑按钮；原正文同名文字及其他警告仍保留。"""
+        editor = self.page.locator("#editor")
+        await editor.evaluate("""el=>el.innerHTML='<p>正文编辑图片</p>'+
+            '<div class="node-image"><img src="https://fixture.test/uploaded.png">'+
+            '<button title="编辑图片">编辑图片</button><span>图片上传失败</span></div>'+
+            '<button title="编辑图片">其他编辑图片</button><p>末段</p>'""")
+        self.assertEqual(await body_sequence(editor, "douyin", include_images=False),
+                         "正文编辑图片图片上传失败其他编辑图片末段")
+        self.assertEqual(await body_sequence(editor, "douyin"),
+                         "正文编辑图片OMNIPOSTIMAGE0000END图片上传失败其他编辑图片末段")
+        self.assertIn("编辑图片图片上传失败", await body_sequence(editor, "zhihu"))
+
+    async def test_picture_controls_do_not_hide_image_position(self):
+        """图片标记在原来的段落之间，移动节点后顺序读回应产生可见差异。"""
+        editor = self.page.locator("#editor")
+        await editor.evaluate("""el=>el.innerHTML='<p>首段</p><div class="node-image">'+
+            '<img src="https://fixture.test/uploaded.png"><button title="编辑图片">编辑图片</button>'+
+            '</div><p>尾段</p>'""")
+        expected = "首段OMNIPOSTIMAGE0000END尾段"
+        self.assertEqual(await body_sequence(editor, "douyin"), expected)
+        await editor.evaluate("el=>el.appendChild(el.querySelector('.node-image'))")
+        self.assertNotEqual(await body_sequence(editor, "douyin"), expected)
+
+    async def test_final_douyin_body_rejects_warning_missing_text_and_image_changes(self):
+        """不使用剪贴板：模拟平台图片节点，并检查选项之后的正文变化。"""
+        urls = ["https://p3.douyinpic.com/a.png", "https://p3.douyinpic.com/b.png"]
+        await self.page.route("https://p3.douyinpic.com/**", lambda route: route.fulfill(
+            body=PNG, content_type="image/png"))
+        document = PreparedDocument("", "<p>首段OMNIPOSTIMAGE0000END</p>"
+                                    "<p>中段OMNIPOSTIMAGE0001END</p><p>尾段</p>",
+                                    "首段中段尾段", [self.root / "a.png", self.root / "b.png"], [], [], urls)
+        html = ('<p>首段</p><div class="node-image"><img src="' + urls[0] + '">'
+                '<button title="编辑图片">编辑图片</button></div><p>中段</p>'
+                '<div class="node-image"><img src="' + urls[1] + '">'
+                '<button title="编辑图片">编辑图片</button></div><p>尾段</p>')
+        editor = self.page.locator("#editor")
+        await editor.evaluate("(el,html)=>el.innerHTML=html", html)
+        await editor.evaluate("el=>Promise.all(Array.from(el.querySelectorAll('img')).map(img=>img.decode()))")
+        await _verify_final_body(editor, document, "douyin")
+        for modification, message in (
+                ("el=>el.insertAdjacentHTML('beforeend','<span>图片上传失败</span>')", "正文不一致"),
+                ("el=>el.querySelector('p').remove()", "正文不一致"),
+                ("el=>el.querySelector('img').src='https://p3.douyinpic.com/b.png'", "图片地址或顺序"),
+                # 移到首段之前，保持两张图片地址顺序，单独覆盖图片与段落的相对位置。
+                ("el=>el.insertBefore(el.querySelector('.node-image'),el.firstChild)", "相邻段落")):
+            with self.subTest(message=message):
+                await editor.evaluate("(el,html)=>el.innerHTML=html", html)
+                await editor.evaluate(modification)
+                await editor.evaluate("el=>Promise.all(Array.from(el.querySelectorAll('img')).map(img=>img.decode()))")
+                with self.assertRaisesRegex(PreparationError, message):
+                    await _verify_final_body(editor, document, "douyin")
+
+    async def test_link_text_fallback_keeps_empty_labels_and_existing_url_labels(self):
+        """空标签仍保留目标地址，已经以地址为文字的链接不会重复附加。"""
+        content = '<p><a href="https://example.org/empty"></a>' \
+                  '<a href="https://example.org/same">https://example.org/same</a></p>'
+        document = await prepare_document(self.render_page, content, {}, self.root,
+                                          "sans-serif", links_as_text=True)
+        self.assertNotIn("<a ", document.prepared_html)
+        self.assertIn("https://example.org/empty", document.expected_text)
+        self.assertEqual(document.expected_text.count("https://example.org/same"), 1)
+
     async def test_preview_blocks_click_and_shortcut(self):
         await install_preview_guard(self.page)
         self.assertTrue(await self.page.evaluate("Boolean(window.__omnipostPreviewGuard)"))
@@ -322,6 +456,77 @@ class ArticleLocalBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.page.locator("button").evaluate("el=>el.click()")
         await self.page.keyboard.press("ControlOrMeta+Enter")
         self.assertEqual(await self.page.evaluate("window.submissions||0"), 0)
+
+    async def test_preview_init_script_guards_early_events_and_dynamic_buttons(self):
+        """页面加载前安装保护，根节点尚未创建时不报错，加载后持续禁用动态按钮。"""
+        errors = []
+        self.page.on("pageerror", lambda error: errors.append(str(error)))
+        await self.page.add_init_script(_PREVIEW_GUARD)
+        await self.page.route("https://fixture.test/preview-init", lambda route: route.fulfill(
+            content_type="text/html; charset=utf-8", body="""<!doctype html><body>
+                <button id="early">发布</button><script>
+                window.submissions=0;window.shortcuts=0;
+                document.addEventListener('click',()=>window.submissions++);
+                document.addEventListener('keydown',event=>{
+                    if((event.ctrlKey||event.metaKey)&&event.key==='Enter')window.shortcuts++;
+                });
+                document.getElementById('early').dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}));
+                document.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',ctrlKey:true,bubbles:true,cancelable:true}));
+                </script></body>"""))
+        await self.page.goto("https://fixture.test/preview-init")
+        self.assertEqual(errors, [])
+        self.assertEqual(await self.page.evaluate("[window.submissions,window.shortcuts]"), [0, 0])
+
+        self.assertTrue(await self.page.locator("#early").evaluate("el=>el.disabled"))
+        await self.page.evaluate("""()=>{
+            const button=document.createElement('button');button.id='late';button.textContent='确认发布';
+            document.body.appendChild(button);
+            const save=document.createElement('button');save.id='save';save.textContent='保存草稿';
+            document.body.appendChild(save);
+        }""")
+        await self.page.wait_for_function("document.getElementById('late').disabled")
+        self.assertEqual(await self.page.locator("#late").get_attribute("aria-disabled"), "true")
+        self.assertFalse(await self.page.locator("#save").evaluate("el=>el.disabled"))
+        # 再次安装不得撤销首次安装后动态节点的保护。
+        await self.page.evaluate(_PREVIEW_GUARD)
+        await self.page.locator("#late").dispatch_event("click")
+        await self.page.keyboard.press("ControlOrMeta+Enter")
+        self.assertEqual(await self.page.evaluate("[window.submissions,window.shortcuts]"), [0, 0])
+
+    async def test_native_preview_request_guard_blocks_only_exact_douyin_publish(self):
+        """真实 fetch 经过路由保护；模拟远端只接收允许的上传及认证请求。"""
+        received = []
+
+        async def remote(route):
+            """记录最终到达模拟远端的请求，禁止回退到实际网络。"""
+            received.append(route.request.url)
+            await route.fulfill(content_type="application/json", body='{"ok":true}',
+                                headers={"Access-Control-Allow-Origin": "*"})
+
+        # 先安装模拟远端，再安装生产保护，验证保护不会向下转交提交请求。
+        await self.page.route("https://creator.douyin.com/**", remote)
+        self.assertTrue(await install_native_preview_request_guard(self.page, "douyin"))
+        endpoint = "https://creator.douyin.com/web/api/media/aweme/create_v2/"
+        for url in (endpoint, endpoint + "?test=preview"):
+            result = await self.page.evaluate("""async url=>{
+                try{await fetch(url,{method:'POST',body:'test'});return 'allowed';}
+                catch(error){return 'blocked';}
+            }""", url)
+            self.assertEqual(result, "blocked")
+        self.assertEqual(received, [])
+        allowed = ["https://creator.douyin.com/web/api/media/upload/",
+                   "https://creator.douyin.com/web/api/auth/",
+                   endpoint + "other"]
+        for url in allowed:
+            result = await self.page.evaluate("async url=>(await fetch(url)).json()", url)
+            self.assertEqual(result, {"ok": True})
+        self.assertEqual(received, allowed)
+        for platform in ("bilibili", "baijiahao", "toutiao", "weibo", "zhihu", "qiehao", "sohu"):
+            with self.subTest(platform=platform):
+                unguarded = MagicMock()
+                unguarded.route = AsyncMock()
+                self.assertFalse(await install_native_preview_request_guard(unguarded, platform))
+                unguarded.route.assert_not_awaited()
 
     async def test_statement_checks_exact_selected_option(self):
         await self.page.locator("body").evaluate("""el=>{

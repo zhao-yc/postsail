@@ -669,36 +669,104 @@ async def zhihu_cookie_gen(id, status_queue):
             pass
 
 
-# Bilibili登录（通过biliup CLI，在新终端窗口中扫码）
-async def bilibili_cookie_gen(id, status_queue):
+async def article_account_cookie_gen(id, status_queue, platform, account_type):
+    """独立文章账号手动登录；正向确认后台再持久化，不触发平台发布。"""
+    from myUtils.auth import ARTICLE_LOGIN_PROBES, article_account_is_logged_in
+    cookies_dir = Path(BASE_DIR / "cookiesFile")
+    cookies_dir.mkdir(exist_ok=True)
+    account_file = cookies_dir / f"{platform}_{uuid.uuid4().hex}.json"
+    try:
+        status_queue.put("MANUAL_LOGIN")
+        async with async_playwright() as playwright:
+            options = get_browser_options()
+            options["headless"] = False
+            browser = await playwright.chromium.launch(**options)
+            try:
+                context = await browser.new_context()
+                page = await context.new_page()
+                await page.goto(ARTICLE_LOGIN_PROBES[platform]["url"], wait_until="domcontentloaded", timeout=60_000)
+                deadline = asyncio.get_running_loop().time() + 200
+                while asyncio.get_running_loop().time() < deadline:
+                    if await article_account_is_logged_in(page, platform, timeout=2000):
+                        await context.storage_state(path=account_file)
+                        break
+                    await asyncio.sleep(1)
+                else:
+                    raise RuntimeError("未检测到已登录后台，请重新登录或导入 Cookie")
+            finally:
+                await browser.close()
+        if not await check_cookie(account_type, account_file.name):
+            raise RuntimeError("登录会话校验未通过")
+        with sqlite3.connect(Path(BASE_DIR / "db" / "database.db")) as conn:
+            conn.execute('INSERT INTO user_info (type,filePath,userName,status) VALUES (?,?,?,?)',
+                         (account_type, account_file.name, id, 1))
+        status_queue.put("200")
+        return True
+    except Exception:
+        account_file.unlink(missing_ok=True)
+        print(f"❌ {platform} 登录未完成，请检查浏览器或使用 Cookie 导入")
+        status_queue.put("500")
+        return False
+
+
+async def weibo_cookie_gen(id, status_queue):
+    """微博账号使用新增类型 10，保持原有账号编号兼容。"""
+    return await article_account_cookie_gen(id, status_queue, "weibo", 10)
+
+
+async def qiehao_cookie_gen(id, status_queue):
+    """企鹅号账号使用类型 11，与微信视频号的类型 2 分开保存。"""
+    return await article_account_cookie_gen(id, status_queue, "qiehao", 11)
+
+
+def launch_bilibili_login_terminal(biliup_path, account_file, system=None):
+    """按系统打开交互终端；参数逐项传入，macOS shell 参数和 AppleScript 分别转义。"""
+    import shlex
+    import shutil
     import subprocess
     import sys
+    import conf
+    system = system or sys.platform
+    command = [str(biliup_path), "-u", str(account_file), "login"]
+    if system == "win32":
+        return subprocess.Popen(command, creationflags=subprocess.CREATE_NEW_CONSOLE)
+    if system == "darwin":
+        # shell 先引用每个参数，再引用完整 AppleScript 字符串，账号名不作为代码执行。
+        shell_command = shlex.join(command)
+        apple_string = '"' + shell_command.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r') + '"'
+        return subprocess.Popen(["osascript", "-e", 'tell application "Terminal" to activate',
+                                 "-e", f'tell application "Terminal" to do script {apple_string}'])
+    prefix = getattr(conf, "BILIBILI_TERMINAL_COMMAND", None)
+    if prefix:
+        if not isinstance(prefix, (list, tuple)) or any(not isinstance(arg, str) or not arg for arg in prefix):
+            raise RuntimeError("BILIBILI_TERMINAL_COMMAND 必须为非空字符串参数列表")
+        return subprocess.Popen([*prefix, *command])
+    if shutil.which("x-terminal-emulator"):
+        return subprocess.Popen(["x-terminal-emulator", "-e", *command])
+    raise RuntimeError("未找到图形终端；请配置 BILIBILI_TERMINAL_COMMAND，或在另一台电脑运行 biliup login 后导入 Cookie JSON")
+
+
+# Bilibili登录（通过biliup CLI，在新终端窗口中扫码）
+async def bilibili_cookie_gen(id, status_queue):
     from uploader.bilibili_uploader.runtime import ensure_biliup_binary
 
     account_dir = Path(BASE_DIR / "cookiesFile")
     account_dir.mkdir(exist_ok=True)
-    account_file = account_dir / f"bilibili_{id}.json"
-
-    # 获取正确的biliup二进制路径（不是pip安装的Python版）
-    biliup_path = str(ensure_biliup_binary(force_check=False))
+    # 不把用户输入用作文件路径，避免账号名称包含目录分隔符或碰撞已有会话。
+    account_file = account_dir / f"bilibili_{uuid.uuid4().hex}.json"
 
     # 通知前端已打开终端，请手动登录
     status_queue.put("MANUAL_LOGIN")
 
     try:
+        # 依赖下载或终端不可用时统一给出可操作的 Cookie 导入回退。
+        biliup_path = str(ensure_biliup_binary(force_check=False))
         # 在新终端窗口中运行 biliup login
-        if sys.platform == 'win32':
-            subprocess.Popen(
-                [biliup_path, '-u', str(account_file), 'login'],
-                creationflags=subprocess.CREATE_NEW_CONSOLE
-            )
-        else:
-            subprocess.Popen(
-                ['x-terminal-emulator', '-e', biliup_path, '-u', str(account_file), 'login']
-            )
+        launch_bilibili_login_terminal(biliup_path, account_file)
         print(f"✅ 已打开终端窗口，请在终端中扫码登录Bilibili")
     except Exception as e:
         print(f"❌ 打开终端失败: {e}")
+        status_queue.put("IMPORT_COOKIE")
         status_queue.put("500")
         return
 
@@ -712,7 +780,7 @@ async def bilibili_cookie_gen(id, status_queue):
                 with sqlite3.connect(Path(BASE_DIR / "db" / "database.db")) as conn:
                     conn.cursor().execute(
                         'INSERT INTO user_info (type, filePath, userName, status) VALUES (?, ?, ?, ?)',
-                        (6, f"bilibili_{id}.json", id, 1))
+                        (6, account_file.name, id, 1))
                     conn.commit()
                 status_queue.put("200")
                 return

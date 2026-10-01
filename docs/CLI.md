@@ -7,7 +7,7 @@
 - `xiaohongshu`
 - `bilibili`
 - `tencent`
-- `article`：百家号、知乎、今日头条、搜狐号独立文章 API 客户端
+- `article`：抖音、B站、百家号、今日头条、微博、知乎、企鹅号、搜狐号独立文章 API 客户端
 
 实现说明：
 
@@ -53,6 +53,7 @@ $env:PLAYWRIGHT_DOWNLOAD_HOST="https://npmmirror.com/mirrors/playwright"; patchr
 
 ```bash
 sau article accounts --json
+sau article capabilities --json
 sau article import --file ./draft/article.md --title "示例教程" --cover ./draft/cover.png --json
 sau article update ARTICLE_ID --revision 1 --file ./draft/article.md --json
 sau article publish ARTICLE_ID --targets ./targets.json --preview --idempotency-key draft-preview-01 --json
@@ -61,9 +62,11 @@ sau article status BATCH_ID --wait --timeout 300 --json
 sau article retry TASK_ID --json
 ```
 
-`ARTICLE_ID`、`BATCH_ID`、`TASK_ID` 是服务返回的字符串 ID；账号使用网页账号正整数 ID。`targets.json` 指定 `baijiahao/zhihu/toutiao/sohu` 平台和账号，支持标题、封面、话题、声明覆盖。正文支持 Markdown、HTML、纯文本，本地图片先上传；官网流程独立。
+`ARTICLE_ID`、`BATCH_ID`、`TASK_ID` 是服务返回的字符串 ID；账号使用网页账号正整数 ID。`targets.json` 支持 `douyin/bilibili/baijiahao/toutiao/weibo/zhihu/qiehao/sohu`，可覆盖标题、封面、话题和平台 `options`。抖音支持摘要，微博支持导语和配套微博文字，企鹅号提供分类和摘要输入；所有选项以 `capabilities` 返回的 `option_fields` 及实际页面核验为准。正文支持 Markdown、HTML、纯文本，本地图片先上传；官网流程独立。
 
-默认正式立即发布，`--preview` 可选。四平台文章首版不支持定时请求，不能使用视频命令的 `--schedule`。`queued` 只表示任务受理，`submitted` 表示平台已接收、可能审核中，`published` 才表示取得已发表依据；`unknown` 必须人工核查后再决定重试。各平台真实账号尚未验收，不能把离线测试通过当作发布成功。
+默认正式立即发布，`--preview` 可选。八平台文章不支持定时请求，不能使用视频命令的 `--schedule`。预览必须完成标题、正文、图片和选项读回才返回 `previewed`。正式操作先持久化 `submit_started`，再进行第一次可能提交的动作；点击超时或多步骤中断不会自动重新发布。`queued` 只表示任务受理，`submitted` 表示平台已接收、可能审核中，`published` 才表示取得已发表依据；`unknown` 必须人工核查后再决定重试。当前真实验收见[文章平台验证记录](./article-platform-verification.md)，不能把代码接入或离线测试通过当作发布成功。
+
+抖音完整真实预览已通过，正式发布已取得明确提交回执，公开文章已现场核实；其余七个平台缺少验收账号，本轮未验收真实原生话题和声明。抖音正文超链接默认阻止，显式设置 `options.links_as_text:true` 后转成「原文字（完整网址）」并保留原稿与转换稿；准备顺序为先封面、后标题和正文。预览先精确阻断文章创建请求，封面完成后再安装页面按钮与快捷键保护。正式任务被动读取原生文章创建成功响应，记录 `submitted` 和内容 ID，其他任务的审核与公开链接仍须单独核对。
 
 服务通过 `--server` 或 `OMNIPOST_API_URL` 配置，默认 `http://127.0.0.1:5409`。完整目标文件、修订检查、幂等键、结果核查和 API 说明见[独立多平台文章发布](./articles.md)。
 
@@ -127,7 +130,7 @@ sau bilibili upload-video --account <account_name> --file videos/demo.mp4 --titl
 
 抖音、快手、小红书的图文和视频上传，以及 Bilibili 的视频上传都支持 `--schedule`。只要传了 `--schedule`，CLI 就会自动切换到对应平台的定时发布策略；不传则默认立即发布。
 
-该规则不适用于 `sau article`：百家号、知乎、今日头条、搜狐号的文章首版仅支持立即发布，API 收到定时请求会明确拒绝。
+该规则不适用于 `sau article`：八个平台的文章仅支持立即发布，API 收到定时请求会明确拒绝。
 
 ```bash
 sau douyin upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --schedule "2026-03-24 21:30"

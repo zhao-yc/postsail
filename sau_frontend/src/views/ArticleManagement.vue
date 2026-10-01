@@ -76,6 +76,12 @@
         <p class="distribution-caption">选择平台账号；留空的覆盖项沿用文章内容。</p>
         <div v-for="platform in capabilities" :key="platform.platform" class="platform-section">
           <div class="platform-heading"><span class="platform-mark">{{ platform.label.slice(0, 1) }}</span><h3>{{ platform.label }}</h3></div>
+          <p class="capability-note">{{ platform.content_kind || '文章' }} · {{ platform.live_verified ? '已完成基础流程验证' : '真实账号待验证' }}</p>
+          <p class="capability-note">{{ verificationHint(platform) }}</p>
+          <p v-if="platform.verification_scope" class="capability-note">验证范围：{{ platform.verification_scope }}</p>
+          <p class="capability-note">{{ titleHint(platform) }} · {{ platform.cover_required ? '必须有封面' : '封面可选' }}{{ coverHint(platform) }}</p>
+          <p v-if="platform.reason || platform.limitations" class="capability-note">{{ platform.reason || platform.limitations }}</p>
+          <p v-if="platform.permission_check" class="capability-note">{{ platform.permission_check }}</p>
           <div v-if="accountsFor(platform.platform).length" class="account-options">
             <div v-for="account in accountsFor(platform.platform)" :key="account.id" class="account-option">
               <el-checkbox :model-value="selectedAccountIds.includes(account.id)" @change="toggleAccount(account, $event)">{{ account.user_name }}</el-checkbox>
@@ -96,13 +102,24 @@
               <el-button v-if="targetConfigs[account.id].cover_asset_id" text size="small" @click="targetConfigs[account.id].cover_asset_id = null; markDirty()">沿用默认</el-button>
             </div>
             <small>{{ platform.cover_required ? '必须有封面' : '封面可选' }}{{ coverHint(platform) }}</small>
-            <label>话题覆盖</label><el-input v-model="targetConfigs[account.id].tags_text" placeholder="沿用默认话题" @input="markDirty" />
-            <el-checkbox v-if="platform.platform === 'baijiahao'" v-model="targetConfigs[account.id].ai_generated" @change="markDirty">含 AI 生成内容</el-checkbox>
-            <template v-if="platform.statement_options?.length">
-              <label>创作声明</label>
-              <el-select v-model="targetConfigs[account.id].statement" placeholder="按平台默认" clearable @change="markDirty">
-                <el-option v-for="statement in platform.statement_options" :key="statementValue(statement)" :label="statementLabel(statement)" :value="statementValue(statement)" />
+            <label>话题覆盖</label>
+            <el-select v-model="targetConfigs[account.id].tags_mode" @change="markDirty">
+              <el-option label="沿用默认话题" value="inherit" /><el-option label="单独设置话题" value="custom" /><el-option label="清空话题" value="clear" />
+            </el-select>
+            <el-input v-if="targetConfigs[account.id].tags_mode === 'custom'" v-model="targetConfigs[account.id].tags_text" placeholder="用逗号分隔；留空表示清空" @input="markDirty" />
+            <template v-for="field in optionFields(platform)" :key="field.name">
+              <label>{{ field.label }}{{ field.required ? '（必填）' : '' }}</label>
+              <el-select :model-value="optionMode(account.id, field.name)" @change="setOptionMode(account.id, field, $event)">
+                <el-option label="继承平台设置" value="inherit" /><el-option label="单独设置" value="custom" /><el-option label="清空设置" value="clear" />
               </el-select>
+              <template v-if="optionMode(account.id, field.name) === 'custom'">
+                <el-checkbox v-if="field.type === 'boolean'" v-model="targetConfigs[account.id].options[field.name]" @change="markDirty">{{ field.label }}</el-checkbox>
+                <el-select v-else-if="field.type === 'select'" v-model="targetConfigs[account.id].options[field.name]" :placeholder="field.placeholder || '请选择'" clearable @change="markDirty">
+                  <el-option v-for="option in field.options || []" :key="statementValue(option)" :label="statementLabel(option)" :value="statementValue(option)" />
+                </el-select>
+                <el-input v-else v-model="targetConfigs[account.id].options[field.name]" :type="field.type === 'textarea' ? 'textarea' : 'text'" :placeholder="field.placeholder" :maxlength="field.max_length" :show-word-limit="!!field.max_length" @input="markDirty" />
+              </template>
+              <small v-else-if="optionMode(account.id, field.name) === 'inherit'">当前平台设置：{{ inheritedOption(account.platform, field.name) }}</small>
             </template>
           </details>
         </div>
@@ -131,37 +148,38 @@
             <el-button v-if="task.evidence?.length" text size="small" @click="showEvidence(task)">查看证据</el-button>
             <el-button v-if="task.retry_allowed && ['failed', 'needs_action'].includes(task.status)" text type="primary" size="small" @click="retryTask(task)">{{ task.status === 'needs_action' ? '完成操作后重试' : '重试此账号' }}</el-button>
             <el-button v-if="task.status === 'unknown'" text type="warning" size="small" @click="openResolution(task)">记录人工核查</el-button>
+            <el-button v-if="task.status === 'submitted'" text type="primary" size="small" @click="openResolution(task)">核对公开发表</el-button>
           </div>
         </div>
       </article>
     </section>
 
-    <el-dialog v-model="importVisible" title="导入文章内容" width="660px">
+    <el-dialog v-model="importVisible" title="导入文章内容" width="min(660px, calc(100vw - 24px))">
       <p class="dialog-note">导入会替换当前正文。图片会在保存时导入为本地素材。</p>
       <el-radio-group v-model="importFormat"><el-radio-button value="markdown">Markdown</el-radio-button><el-radio-button value="html">HTML</el-radio-button><el-radio-button value="text">纯文本</el-radio-button></el-radio-group>
       <el-input v-model="importContent" type="textarea" :rows="12" placeholder="粘贴文章正文" class="import-input" />
       <input type="file" accept=".md,.markdown,.html,.htm,.txt" @change="readImportFile" />
       <template #footer><el-button @click="importVisible = false">取消</el-button><el-button type="primary" :loading="saving" :disabled="!importContent.trim()" @click="importArticle">导入并保存</el-button></template>
     </el-dialog>
-    <el-dialog v-model="imageVisible" title="插入正文图片" width="480px">
+    <el-dialog v-model="imageVisible" title="插入正文图片" width="min(480px, calc(100vw - 24px))">
       <p class="dialog-note">本地图片或公开图片地址都会保存到文章素材库。</p>
       <el-upload drag :auto-upload="false" :show-file-list="false" multiple accept="image/jpeg,image/png,image/webp" :on-change="(file) => insertImageFile(file.raw)">
         <el-icon class="el-icon--upload"><UploadFilled /></el-icon><div>拖入图片，或点击选择</div>
       </el-upload>
       <div class="image-url"><el-input v-model="imageUrlInput" placeholder="https://… 图片地址" /><el-button :loading="uploading" :disabled="!imageUrlInput.trim()" @click="insertRemoteImage">导入图片</el-button></div>
     </el-dialog>
-    <el-dialog v-model="evidenceVisible" title="任务证据" width="800px">
+    <el-dialog v-model="evidenceVisible" title="任务证据" width="min(800px, calc(100vw - 24px))">
       <template v-for="url in evidenceUrls" :key="url">
         <img v-if="/\.(png|jpe?g|webp)(?:$|\?)/i.test(url)" :src="url" alt="平台发布任务截图" class="evidence-image" />
         <el-link v-else :href="url" target="_blank" rel="noopener noreferrer">打开证据文件</el-link>
       </template>
     </el-dialog>
-    <el-dialog v-model="resolveVisible" title="记录人工核查结果" width="520px">
-      <el-alert type="warning" :closable="false" title="先到平台核查是否已有文章。结果不确定的任务不会自动重发。" />
+    <el-dialog v-model="resolveVisible" :title="publishedOnlyResolution ? '核对公开发表' : '记录人工核查结果'" width="min(520px, calc(100vw - 24px))">
+      <el-alert type="warning" :closable="false" :title="publishedOnlyResolution ? '请确认文章已公开可访问，并填写公开文章链接和核查说明。此处只记录已公开发表的核查结果。' : '先到平台核查是否已有文章。结果不确定的任务不会自动重发。'" />
       <el-form label-position="top" class="resolution-form">
-        <el-form-item label="核查结果"><el-select v-model="resolution.resolution"><el-option label="确认没有发布，可以重试" value="not_published" /><el-option label="平台已受理，正在审核" value="submitted" /><el-option label="确认已经公开发表" value="published" /></el-select></el-form-item>
-        <el-form-item label="平台文章链接"><el-input v-model="resolution.platform_url" placeholder="已受理或已发表时建议填写" /></el-form-item>
-        <el-form-item label="核查说明"><el-input v-model="resolution.note" type="textarea" :rows="3" placeholder="记录平台核查情况" /></el-form-item>
+        <el-form-item label="核查结果"><el-select v-model="resolution.resolution"><el-option v-if="!publishedOnlyResolution" label="确认没有发布，可以重试" value="not_published" /><el-option v-if="!publishedOnlyResolution" label="平台已受理，正在审核" value="submitted" /><el-option label="确认已经公开发表" value="published" /></el-select></el-form-item>
+        <el-form-item label="平台文章链接" :required="publishedOnlyResolution"><el-input v-model="resolution.platform_url" :placeholder="publishedOnlyResolution ? '必填：http:// 或 https:// 公开文章链接' : '已受理或已发表时建议填写'" /></el-form-item>
+        <el-form-item label="核查说明" :required="publishedOnlyResolution"><el-input v-model="resolution.note" type="textarea" :rows="3" :placeholder="publishedOnlyResolution ? '必填：记录公开访问及内容核对情况' : '记录平台核查情况'" /></el-form-item>
       </el-form>
       <template #footer><el-button @click="resolveVisible = false">取消</el-button><el-button type="primary" :loading="resolving" @click="resolveTask">保存核查结果</el-button></template>
     </el-dialog>
@@ -207,6 +225,7 @@ const evidenceUrls = ref([])
 const resolveVisible = ref(false)
 const resolving = ref(false)
 const resolutionTask = ref(null)
+const publishedOnlyResolution = computed(() => resolutionTask.value?.status === 'submitted')
 const resolution = reactive({ resolution: 'not_published', platform_url: '', note: '' })
 const form = reactive({ id: null, title: '', revision: null, cover_asset_id: null, platform_options: {} })
 let pollingTimer = null
@@ -253,6 +272,43 @@ function platformLabel(platform) { return capabilities.value.find((item) => item
 function accountLabel(id) { return accounts.value.find((item) => item.id === id)?.user_name || `账号 ${id}` }
 function statementValue(option) { return typeof option === 'string' ? option : option.value }
 function statementLabel(option) { return typeof option === 'string' ? option : option.label }
+// 兼容旧能力字段，服务端声明的新字段优先，避免重复显示声明与 AI 开关。
+function optionFields(platform) {
+  const fields = [...(platform.option_fields || [])]
+  if (platform.statement_options?.length && !fields.some((field) => field.name === 'statement')) fields.push({ name: 'statement', label: '创作声明', type: 'select', options: platform.statement_options })
+  if (platform.platform === 'baijiahao' && !fields.some((field) => field.name === 'ai_generated')) fields.push({ name: 'ai_generated', label: '含 AI 生成内容', type: 'boolean' })
+  return fields
+}
+// 三态区分继承、覆盖和清空，布尔 false 也属于明确覆盖。
+function optionMode(id, name) { return targetConfigs[id].option_modes[name] || 'inherit' }
+function setOptionMode(id, field, mode) {
+  const config = targetConfigs[id]
+  config.option_modes[field.name] = mode
+  if (mode === 'custom' && config.options[field.name] == null) config.options[field.name] = field.type === 'boolean' ? false : ''
+  markDirty()
+}
+function inheritedOption(platform, name) {
+  const value = form.platform_options[platform]?.options?.[name]
+  return value == null || value === '' ? '平台默认' : typeof value === 'boolean' ? (value ? '是' : '否') : value
+}
+// 未知配置一并保留，能力版本升级后再次保存不会丢失原配置。
+function resolvedOptions(account, config) {
+  const options = { ...(form.platform_options[account.platform]?.options || {}), ...config.options }
+  const platform = capabilities.value.find((item) => item.platform === account.platform)
+  optionFields(platform || {}).forEach((field) => {
+    const mode = optionMode(account.id, field.name)
+    if (mode === 'inherit') {
+      const original = form.platform_options[account.platform]?.options || {}
+      if (Object.hasOwn(original, field.name)) options[field.name] = original[field.name]
+      else delete options[field.name]
+    } else if (mode === 'clear') options[field.name] = field.type === 'boolean' ? false : ''
+  })
+  return options
+}
+function verificationHint(platform) {
+  const verification = platform.verification || {}
+  return [['preview', '预览'], ['submitted', '受理'], ['published', '公开发表']].map(([key, label]) => `${label}：${verification[key] ? '已验证' : '待验证'}`).join(' · ')
+}
 function titleHint(platform) { return `标题 ${platform.title_min || 1}–${platform.title_max || '不限'} 字` }
 function coverHint(platform) {
   const size = platform.cover_max_bytes ? `，最大 ${Math.round(platform.cover_max_bytes / 1024 / 1024)} MB` : ''
@@ -288,7 +344,7 @@ function toggleAccount(account, selected) {
     selectedAccountIds.value = [...new Set([...selectedAccountIds.value, account.id])]
     if (!targetConfigs[account.id]) {
       const defaults = form.platform_options[account.platform] || {}
-      targetConfigs[account.id] = { title: defaults.title || '', cover_asset_id: defaults.cover_asset_id || null, tags_text: (defaults.tags || []).join('，'), statement: defaults.options?.statement || '', ai_generated: !!defaults.options?.ai_generated }
+      targetConfigs[account.id] = { title: defaults.title || '', cover_asset_id: defaults.cover_asset_id || null, tags_text: (defaults.tags || []).join('，'), tags_mode: Array.isArray(defaults.tags) ? (defaults.tags.length ? 'custom' : 'clear') : 'inherit', options: { ...(defaults.options || {}) }, option_modes: {} }
     }
   } else selectedAccountIds.value = selectedAccountIds.value.filter((id) => id !== account.id)
 }
@@ -303,10 +359,11 @@ function collectPlatformOptions() {
     seen.add(account.platform)
     const config = targetConfigs[id]
     defaults[account.platform] = {
+      ...(defaults[account.platform] || {}),
       title: config.title.trim() || null,
       cover_asset_id: config.cover_asset_id || null,
-      tags: config.tags_text.trim() ? parseTags(config.tags_text) : null,
-      options: { ...(config.statement ? { statement: config.statement } : {}), ...(account.platform === 'baijiahao' ? { ai_generated: config.ai_generated } : {}) }
+      tags: config.tags_mode === 'inherit' ? null : config.tags_mode === 'clear' ? [] : parseTags(config.tags_text),
+      options: resolvedOptions(account, config)
     }
   })
   return defaults
@@ -462,8 +519,10 @@ async function submitPublication() {
     const targets = selectedAccountIds.value.map((id) => {
       const account = accounts.value.find((item) => item.id === id)
       const config = targetConfigs[id]
-      const options = { statement: config.statement || '', ...(account.platform === 'baijiahao' ? { ai_generated: config.ai_generated } : {}) }
-      const overrides = { title: config.title.trim() || form.title, cover_asset_id: config.cover_asset_id || form.cover_asset_id || null, tags: config.tags_text.trim() ? parseTags(config.tags_text) : parseTags(tagsInput.value), options }
+      const options = resolvedOptions(account, config)
+      const overrides = { title: config.title.trim() || form.title, cover_asset_id: config.cover_asset_id || form.cover_asset_id || null, options }
+      // 沿用时不发送 tags；显式空数组让用户可以清除文章默认话题。
+      if (config.tags_mode !== 'inherit') overrides.tags = config.tags_mode === 'clear' ? [] : parseTags(config.tags_text)
       return { platform: account.platform, account_id: id, overrides }
     })
     // 后端按目标逐项校验并记录失败，单个平台参数不合要求不阻塞其他账号。
@@ -498,11 +557,20 @@ function showEvidence(task) {
   evidenceVisible.value = true
 }
 function openResolution(task) {
+  // 已受理任务只能记录公开发表；结果不确定任务仍保留原核查选项。
   resolutionTask.value = task
-  Object.assign(resolution, { resolution: 'not_published', platform_url: task.platform_url || '', note: '' })
+  Object.assign(resolution, { resolution: task.status === 'submitted' ? 'published' : 'not_published', platform_url: task.platform_url || '', note: '' })
   resolveVisible.value = true
 }
 async function resolveTask() {
+  // 公开发表核查必须有完整的 HTTP(S) 链接和说明，不能降级已受理任务。
+  if (publishedOnlyResolution.value) {
+    let publicUrl
+    try { publicUrl = new URL(resolution.platform_url.trim()) } catch { /* 无效地址交由下面的校验提示。 */ }
+    if (!publicUrl || !['http:', 'https:'].includes(publicUrl.protocol) || !publicUrl.hostname) { ElMessage.warning('请填写有效的 http 或 https 公开文章链接'); return }
+    if (!resolution.note.trim()) { ElMessage.warning('请填写公开发表的核查说明'); return }
+    if (resolution.resolution !== 'published') { ElMessage.warning('已受理任务只能核查为已公开发表'); return }
+  }
   if (resolution.platform_url && !safePlatformUrl(resolution.platform_url)) { ElMessage.warning('平台链接须以 http 或 https 开头'); return }
   resolving.value = true
   try { await articlesApi.resolve(resolutionTask.value.id, { ...resolution }); resolveVisible.value = false; await refreshBatches() }
@@ -594,6 +662,7 @@ h1 { font-family: 'Songti SC', 'Noto Serif CJK SC', serif; font-size: 30px; font
 .account-option :deep(.el-checkbox__label) { overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
 .account-health { font-size: 10px; color: #7c9485; flex-shrink: 0; }
 .account-health.invalid { color: #b28a53; }
+.capability-note { font-size: 11px; color: var(--muted); line-height: 1.6; overflow-wrap: anywhere; }
 .empty-account { font-size: 12px; color: var(--muted); margin: 9px 0 0; }
 .empty-account a { color: var(--accent); }
 .target-overrides { padding-top: 12px; }

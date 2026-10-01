@@ -4,6 +4,7 @@ BASE_DIR = Path(__file__).parent.resolve()
 XHS_SERVER = "http://127.0.0.1:11901"  # only used by xhs-related flows
 LOCAL_CHROME_PATH = ""  # optional, e.g. C:/Program Files/Google/Chrome/Application/chrome.exe
 LOCAL_CHROME_HEADLESS = True  # default headless behavior for uploader/examples
+BILIBILI_TERMINAL_COMMAND = []  # Linux 可配置终端参数，如 ["gnome-terminal", "--"]；无终端时请导入 Cookie
 DEBUG_MODE = True  # default debug behavior
 ARTICLE_BROWSER_HEADLESS = True  # 文章发布是否隐藏浏览器；验证码出现时任务会提示人工处理
 ARTICLE_RENDER_FONT = "Noto Sans CJK SC, PingFang SC, Microsoft YaHei, sans-serif"  # 表格与代码截图字体

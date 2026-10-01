@@ -69,6 +69,24 @@ class InteractionTests(unittest.TestCase):
         self.assertTrue(result["handled"])
         self.assertEqual(result["text"], "已修改的留言")
 
+    def test_new_article_accounts_do_not_break_or_gain_interaction_capabilities(self):
+        """新增微博和企鹅号账号不能使既有互动列表失败，也不能自动获得采集权限。"""
+        with self.service.store.connect() as conn:
+            conn.executemany("INSERT INTO user_info VALUES(?,?,?,?,?)", [
+                (3, 10, "微博文章账号", "weibo.json", 1),
+                (4, 11, "企鹅号文章账号", "qiehao.json", 1)])
+        items = self.service.accounts()["items"]
+        self.assertEqual([item["id"] for item in items], [1, 2])
+        self.assertTrue(all(item["platform"] == "douyin" for item in items))
+        for account_id in (3, 4):
+            with self.subTest(account_id=account_id), self.assertRaisesRegex(InteractionError, "不支持的账号平台"):
+                self.service.sync_account(account_id)
+            with self.subTest(account_id=account_id), self.assertRaisesRegex(InteractionError, "不支持的账号平台"):
+                self.service.update_settings({"accountIds": [account_id], "enabled": True})
+        from utils.interactions.adapters import list_capabilities
+        self.assertNotIn("weibo", {item["platform"] for item in list_capabilities()})
+        self.assertNotIn("qiehao", {item["platform"] for item in list_capabilities()})
+
     def test_manual_reply_idempotency_and_payload_conflict(self):
         identifier = self.ingest()
         first = self.service.reply(identifier, {"text": "谢谢", "idempotencyKey": "reply-test"})

@@ -181,22 +181,93 @@ async def check_cookie(type, file_path):
         # 知乎
         case 9:
             return await cookie_auth_zhihu(Path(BASE_DIR / "cookiesFile" / file_path))
+        # 微博与企鹅号分别使用独立账号，不能复用视频号类型 2。
+        case 10:
+            return await cookie_auth_article_account("weibo", Path(BASE_DIR / "cookiesFile" / file_path))
+        case 11:
+            return await cookie_auth_article_account("qiehao", Path(BASE_DIR / "cookiesFile" / file_path))
         case _:
             return False
 
 
-async def cookie_auth_bilibili(account_file):
-    """通过biliup CLI验证Bilibili cookie是否有效"""
-    from uploader.bilibili_uploader.runtime import run_biliup_command
-    if not account_file.exists():
-        print("[+] Bilibili cookie 文件不存在")
+ARTICLE_LOGIN_PROBES = {
+    "weibo": {"url": "https://card.weibo.com/article/v3/editor", "host": "card.weibo.com",
+              "selector": 'textarea[placeholder="请输入标题"], .ProseMirror[contenteditable="true"]'},
+    "qiehao": {"url": "https://om.qq.com/main/creation/article", "host": "om.qq.com",
+               "selector": 'nav a:text-is("内容管理"):visible, aside a:text-is("内容管理"):visible, '
+                           '[role="menuitem"]:text-is("内容管理"):visible, '
+                           '[class*="sidebar"] a:text-is("内容管理"):visible, '
+                           'a:text-is("退出登录"):visible, button:text-is("退出登录"):visible, '
+                           '[role="menuitem"]:text-is("退出登录"):visible'},
+}
+
+
+async def article_account_is_logged_in(page, platform, timeout=10_000):
+    """必须同时命中平台后台域名和正向编辑器或导航标识，避免超时误判成功。"""
+    from urllib.parse import urlparse
+    probe = ARTICLE_LOGIN_PROBES[platform]
+    try:
+        parsed = urlparse(page.url)
+        if parsed.hostname != probe["host"] or any(value in parsed.path.lower() for value in ("login", "signin", "userauth")):
+            return False
+        if platform == "weibo":
+            import re
+            # 入口首先展示已认证的草稿列表；校验只读列表，不能为查登录创建新草稿。
+            editors = page.locator(probe["selector"])
+            if await editors.count() and await editors.first.is_visible():
+                pass
+            else:
+                write = page.locator('button, a, [role="button"]').filter(has_text=re.compile(r"^写文章$"))
+                await write.first.wait_for(state="visible", timeout=timeout)
+                drafts = page.get_by_text(re.compile(r"^(?:我的)?草稿(?:箱|管理)?(?:\s*[（(]\d+[）)])?$"))
+                await drafts.first.wait_for(state="visible", timeout=timeout)
+        else:
+            # 企鹅号只接受后台导航/账号操作，公开首页的「内容管理」宣传文字不能通过。
+            await page.locator(probe["selector"]).first.wait_for(state="visible", timeout=timeout)
+        parsed = urlparse(page.url)
+        return parsed.hostname == probe["host"] and not any(value in parsed.path.lower() for value in ("login", "signin", "userauth"))
+    except Exception:
         return False
-    result = run_biliup_command(["-u", str(account_file), "renew"])
-    if result.returncode == 0:
-        print("[+] Bilibili cookie 有效")
-        return True
-    else:
-        print("[+] Bilibili cookie 失效")
+
+
+async def cookie_auth_article_account(platform, account_file):
+    """微博与企鹅号正向登录探测，仅访问编辑页，不修改内容。"""
+    from utils.articles.session import load_article_storage_state
+    browser = None
+    try:
+        state = load_article_storage_state(platform, account_file)
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(**get_browser_options(LOCAL_CHROME_HEADLESS, LOCAL_CHROME_PATH))
+            try:
+                context = await browser.new_context(storage_state=state)
+                page = await context.new_page()
+                await page.goto(ARTICLE_LOGIN_PROBES[platform]["url"], wait_until="domcontentloaded", timeout=60_000)
+                return await article_account_is_logged_in(page, platform)
+            finally:
+                await browser.close()
+    except Exception:
+        # 结构、浏览器依赖、网络或登录失败都不能视为有效会话，也不输出凭据内容。
+        print(f"[+] {platform} 会话校验失败，请重新登录或检查浏览器配置")
+        return False
+
+
+async def cookie_auth_bilibili(account_file):
+    """用平台只读登录接口确认会话，兼容标准 state 和 biliup 且不刷新或改写文件。"""
+    from utils.articles.session import load_article_storage_state
+    try:
+        state = load_article_storage_state("bilibili", account_file)
+        async with async_playwright() as playwright:
+            context = await playwright.request.new_context(storage_state=state)
+            try:
+                response = await context.get("https://api.bilibili.com/x/web-interface/nav", timeout=30_000)
+                if not response.ok:
+                    return False
+                result = await response.json()
+                return result.get("code") == 0 and result.get("data", {}).get("isLogin") is True
+            finally:
+                await context.dispose()
+    except Exception:
+        print("[+] Bilibili 会话校验失败，请重新登录")
         return False
 
 # a = asyncio.run(check_cookie(1,"3a6cfdc0-3d51-11f0-8507-44e51723d63c.json"))

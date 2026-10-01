@@ -16,24 +16,16 @@ class ArticleError(ValueError):
         self.status = status
 
 
-PLATFORMS = {
-    "baijiahao": {"label": "百家号", "account_type": 5, "title_min": 2, "title_max": 64,
-                  "cover_required": True, "cover_max_bytes": 5 * 1024 * 1024,
-                  "cover_min_width": 0, "cover_min_height": 0, "statement_options": []},
-    "zhihu": {"label": "知乎", "account_type": 9, "title_min": 1, "title_max": 100,
-              "cover_required": False, "cover_max_bytes": 10 * 1024 * 1024,
-              "cover_min_width": 0, "cover_min_height": 0,
-              "statement_options": ["无声明", "包含剧透", "包含医疗建议", "虚构创作", "包含理财内容",
-                                    "包含 AI 辅助创作 作者对内容负责"]},
-    "toutiao": {"label": "今日头条", "account_type": 7, "title_min": 1, "title_max": 30,
-                "cover_required": False, "cover_max_bytes": 20 * 1024 * 1024,
-                "cover_min_width": 0, "cover_min_height": 0,
-                "statement_options": ["取材网络", "引用站内", "个人观点，仅供参考", "引用AI", "虚构演绎，故事经历",
-                                      "投资观点，仅供参考", "健康医疗分享，仅供参考"]},
-    "sohu": {"label": "搜狐号", "account_type": 8, "title_min": 5, "title_max": 72,
-             "cover_required": False, "cover_max_bytes": 10 * 1024 * 1024,
-             "cover_min_width": 450, "cover_min_height": 300,
-             "statement_options": ["无特别声明", "引用声明", "包含AI创作内容", "包含虚构创作"]},
+from .platforms import PLATFORMS
+
+# 这里只记录可复查的真实验收，不能由适配器存在或模拟测试推导。
+LIVE_VERIFICATION = {
+    "douyin": {
+        "preview": True, "submitted": True, "published": True,
+        "date": "2026-10-01",
+        "url": "https://www.douyin.com/article/7691535675165871406",
+        "scope": "已验证单篇文章的标题、完整正文、三图顺序和高清封面；话题、声明及其他账号仍待验证",
+    },
 }
 
 ALLOWED_TAGS = {"p", "br", "h1", "h2", "h3", "h4", "h5", "h6", "strong", "b", "em", "i", "u", "s",
@@ -82,8 +74,46 @@ def image_references(content_html: str) -> list[dict]:
     return parser.images
 
 
+def validate_options(platform: str, options: dict) -> None:
+    """平台选项先校验类型和已知限制，再由真实编辑器核验可用性。"""
+    rules = PLATFORMS[platform]
+    if not isinstance(options, dict):
+        raise ArticleError("平台 options 必须为对象")
+    if any(options.get(key) for key in ("schedule", "publish_date", "enableTimer")):
+        raise ArticleError("文章暂不支持定时发布")
+    fields = {field["name"]: field for field in rules["option_fields"]}
+    for name, value in options.items():
+        if name in {"schedule", "publish_date", "enableTimer"}:
+            continue
+        if name not in fields:
+            # 旧调用者会携带未勾选的 ai_generated；空值不代表启用该功能。
+            if value in (None, "", False):
+                continue
+            raise ArticleError(f"{rules['label']}不支持平台选项：{name}")
+        field = fields[name]
+        if field["type"] == "boolean":
+            if not isinstance(value, bool):
+                raise ArticleError(f"{field['label']}必须为布尔值")
+        elif not isinstance(value, str):
+            raise ArticleError(f"{field['label']}必须为文本")
+        elif field.get("max_length") and len(value) > field["max_length"]:
+            raise ArticleError(f"{field['label']}不能超过 {field['max_length']} 字")
+        elif field["type"] == "select" and value and value not in field.get("options", []):
+            raise ArticleError(f"{rules['label']}创作声明不受支持")
+
+
 def capabilities() -> list[dict]:
     """公开能力中明确区分实现与真实平台验收状态。"""
     return [{"platform": platform, **rules, "scheduled": False,
-             "formats": ["headings", "bold", "lists", "quotes", "links", "images", "table", "code"],
-             "live_verified": False} for platform, rules in PLATFORMS.items()]
+             "formats": ["headings", "bold", "lists", "quotes",
+                         "link_text" if platform == "douyin" else "links", "images", "table", "code"],
+             "live_verified": LIVE_VERIFICATION.get(platform, {}).get("published", False),
+             "verification": {stage: LIVE_VERIFICATION.get(platform, {}).get(stage, False)
+                              for stage in ("preview", "submitted", "published")},
+             "verification_scope": LIVE_VERIFICATION.get(platform, {}).get("scope", "缺少真实账号验收"),
+             "verification_date": LIVE_VERIFICATION.get(platform, {}).get("date", ""),
+             "verification_url": LIVE_VERIFICATION.get(platform, {}).get("url", ""),
+             "permission_check": "进入平台编辑器后检查账号文章权限",
+             "format_fallbacks": {"table": "image", "code": "image",
+                                  **({"links": "text_url_opt_in"} if platform == "douyin" else {})}}
+            for platform, rules in PLATFORMS.items()]

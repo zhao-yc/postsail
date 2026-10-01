@@ -1,6 +1,8 @@
 # 独立多平台文章发布
 
-PostSail 接收准备好的原稿，向百家号、知乎、今日头条、搜狐号分别发布。官网沿用自己的独立发布流程；本功能不抓取官网文章，不依赖官网发布结果。
+PostSail 接收准备好的原稿，向抖音、B站、百家号、今日头条、微博、知乎、企鹅号、搜狐号分别提交原生文章。抖音使用原生文章，B站使用专栏长图文，微博使用头条文章，企鹅号使用文章创作入口。官网沿用独立流程；文章功能不自动抓取官网，也不依赖官网发布结果。
+
+八个平台的代码接入与真实账号验收分别记录。2026-10-01 已现场验证抖音单篇文章的标题、完整正文、三张正文图顺序及高清封面，预览和正式提交均通过，[抖音公开文章](https://www.douyin.com/article/7691535675165871406)已独立打开核实；其余七个平台缺少验收账号。抖音本次未验收真实原生话题或声明，不能据此认定全部专属选项已通过。具体过程、平台限制和证据见[文章平台验证记录](./article-platform-verification.md)。
 
 文章发布使用 Web 后端保存的账号 ID。现有视频 CLI 的账号文件和参数保持不变。先在网页完成目标平台登录，再运行 `sau article accounts --json` 查找可用账号。第一版仅支持立即发布，定时请求会被拒绝，不会回退成立即发布。
 
@@ -86,13 +88,41 @@ sau article asset --url https://example.com/images/cover.png --json
 
 ## 选择账号与平台覆盖项
 
-四个平台标识是 `baijiahao`、`zhihu`、`toutiao`、`sohu`。账号 ID 使用 `accounts` 返回的 `id`，不要填 CLI 视频命令中的 `account_name`。
+八个平台标识是 `douyin`、`bilibili`、`baijiahao`、`toutiao`、`weibo`、`zhihu`、`qiehao`、`sohu`。账号 ID 使用 `accounts` 返回的 `id`，不要填 CLI 视频命令中的 `account_name`。
 
 ```bash
 sau article accounts --json
 sau article accounts --platform zhihu --json
 sau article capabilities --json
 ```
+
+当前文章约束如下。它们是本版本的配置限制，实际账号页面仍会检查权限和控件；平台更新后以能力接口及页面提示为准。
+
+| 平台 | 账号类型 | 原生内容 | 标题字数 | 封面 |
+| --- | --- | --- | --- | --- |
+| 抖音 `douyin` | 3 | 原生文章 | 1–30 | 必填，宽高均至少 500px，≤20MB |
+| B站 `bilibili` | 6 | 专栏 / 长图文 | 1–30 | 可选，至少 600×336px，≤20MB |
+| 百家号 `baijiahao` | 5 | 文章 | 2–64 | 必填，≤5MB |
+| 今日头条 `toutiao` | 7 | 文章 | 1–30 | 可选，≤20MB |
+| 微博 `weibo` | 10 | 头条文章 | 1–32 | 必填，≤10MB |
+| 知乎 `zhihu` | 9 | 文章 | 1–100 | 可选，≤10MB |
+| 企鹅号 `qiehao` | 11 | 文章 | 5–64 | 可选，≤10MB |
+| 搜狐号 `sohu` | 8 | 文章 | 5–72 | 可选，宽高分别大于 450px 和 300px，≤10MB |
+
+封面仅接受 JPEG 或 PNG。微博与企鹅号分别新增类型 `10`、`11`，既有类型不改号；微信视频号仍为类型 `2`。同一 B站账号可供视频和文章使用：视频保留 `biliup` 会话，文章读取时只在内存转换为浏览器会话。标准 Playwright `storage_state` 和 `biliup` JSON 均可通过网页导入，导入会校验结构、目标域名和实际登录状态，不能仅凭 Cookie 存在认定可发布。
+
+`capabilities` 返回每个平台的 `option_fields`，网页据此展示专属字段，API 和 CLI 使用同一平台定义。主要选项如下：
+
+| 平台 | `options` 字段 | 实际处理 |
+| --- | --- | --- |
+| 抖音 | `summary`、`links_as_text`、`statement` | 摘要最多30字；显式启用链接转文字；声明按平台原文查找 |
+| B站 | `statement` | 当前编辑器未提供可配置分区；话题通过正文原生标签节点处理 |
+| 百家号 | `ai_generated` | 使用原生 AI 内容声明并检查选中状态 |
+| 今日头条、知乎、搜狐号 | `statement` | 仅接受能力接口列出的声明并读取选中状态 |
+| 微博 | `summary`、`publish_text`、`statement` | 导语最多44字；配套微博文字留空使用文章标题 |
+| 企鹅号 | `category`、`summary`、`statement` | 精确分类候选；摘要与声明必须有可核实的原生控件 |
+
+文本声明字段不代表任意声明均可用：页面没有精确选项、话题候选没有成为原生选中项、封面仅是本地预览，都会停止为 `needs_action`，不会忽略该选项继续提交。企鹅号出现必填内容自主声明时，需要在平台覆盖项中指定页面显示的声明。账号已登录也可能因未实名、等级、发文额度或文章权限而无法打开编辑器；实际编辑器可用且内容完整读回后才允许继续。
 
 文章、素材、批次和任务的 ID 是不透明字符串（当前为 32 位 UUID 十六进制值），账号 ID 和修订号是正整数。命令示例中的 `ARTICLE_ID`、`BATCH_ID`、`TASK_ID`、`ASSET_ID` 均替换为服务返回的实际值。
 
@@ -116,13 +146,35 @@ sau article capabilities --json
     "overrides": {"options": {"statement": ""}}
   },
   {"platform": "toutiao", "account_id": 4},
-  {"platform": "sohu", "account_id": 5}
+  {"platform": "sohu", "account_id": 5},
+  {
+    "platform": "douyin",
+    "account_id": 6,
+    "overrides": {
+      "cover_asset_id": "ASSET_ID",
+      "options": {"summary": "示例文章摘要", "links_as_text": true}
+    }
+  },
+  {"platform": "bilibili", "account_id": 7},
+  {
+    "platform": "weibo",
+    "account_id": 8,
+    "overrides": {
+      "cover_asset_id": "ASSET_ID",
+      "options": {"summary": "示例导语", "publish_text": "分享一篇教程"}
+    }
+  },
+  {"platform": "qiehao", "account_id": 9}
 ]
 ```
 
 原稿的 `platform_options` 也可保存平台默认值：其 JSON 对象按平台名分组，每组使用与 `overrides` 相同的字段。命令 `import/update --platform-options platform-options.json` 保存默认值，某次发布的目标 `overrides` 覆盖该平台默认值。原稿正文始终保留，不自动改写。
 
-标题、封面、话题和声明要求通过能力接口和平台实际页面共同检查。标题过长不会静默截断；一个账号检查失败，其他目标继续执行。普通标题、加粗、列表、引用、链接、正文图片按原稿顺序发布；平台无法可靠保留的表格和代码块转为清晰图片，原稿仍保留可编辑内容。
+标题、封面、话题和声明要求通过能力接口和平台实际页面共同检查。标题过长不会静默截断；一个账号检查失败，其他目标继续执行。普通标题、加粗、列表、引用、正文图片按原稿顺序准备；平台无法可靠保留的表格和代码块转为清晰图片，原稿仍保留可编辑内容。
+
+抖音当前原生文章编辑器不接受正文超链接，会生成不支持素材提示。默认含超链接的任务明确停止；仅当平台 `options.links_as_text:true` 时，将链接转为「原文字（完整网址）」供平台填写，保留原稿，转换稿记录于任务 `prepared_html`。这属于显式选择的平台格式转换，不能把没有点击链接能力的转换稿当成保留了原生链接。其余平台继续检查链接文字和目标地址，任何格式丢失都不能仅因粘贴成功而标记预览完成。
+
+抖音先设置封面，再填写标题和正文，避免标题引起的预览重绘与封面图层合成相互干扰。封面保存前等待真实分辨率、裁剪背景与文字两层生成图解码，完成只点一次；明确失败提示会停止，只有新的平台 CDN 封面读回才算准备成功。这一顺序已经通过本轮完整真实预览，不能替代原生话题和声明的独立验收。
 
 ## 提交、预览与结果确认
 
@@ -144,7 +196,7 @@ sau article status BATCH_ID --wait --timeout 300 --json
 | --- | --- |
 | `queued` | 后端已接收任务，尚未开始；并不代表平台已发表 |
 | `running` | 浏览器正在准备、校验或提交内容 |
-| `needs_action` | 登录失效、验证码等需要人工处理；处理后重试对应任务 |
+| `needs_action` | 登录、权限、格式或选项准备失败，或平台需要人工验证；先检查 `submit_started`，再按记录允许的操作处理 |
 | `previewed` | 平台预览准备与校验完成，没有正式点击发布；平台可能自动保存草稿 |
 | `submitted` | 取得明确的平台接收回执，可能仍在审核；不等于已发表 |
 | `published` | 取得已发表依据，记录可获取的平台链接或内容 ID |
@@ -169,6 +221,12 @@ sau article resolve TASK_ID --resolution not_published --note "已核对平台�
 
 `resolve` 只记录结论，不执行发布。确认未发布后，需要显式调用 `retry` 才重新执行。平台未能给出明确证据时保留 `unknown`，不要把“点击过发布”当作成功。
 
+已取得平台回执的 `submitted` 任务，也可在公开文章页面核对后使用 `resolve --resolution published`，须填写完整平台链接和核查说明。网页对应「核对公开发表」入口。该状态只能向 `published` 更新，不能降级为未发布或重新发送；内容 ID、提交标记和执行次数保留。
+
+正式操作在第一次可能提交之前先持久化 `submit_started`。持久化失败时不点击；持久化后点击异常、页面超时或进程中断，不能通过换按钮、重开页面或循环点击重发。微博头条文章的「下一步」和最终短微博「发布」分别处理，提交边界在下一步前记录，两步各点击一次；配套微博文字填写后再次读回。抖音预览在打开编辑器前先精确阻断官方文章创建接口 `https://creator.douyin.com/web/api/media/aweme/create_v2/`（含查询参数）；封面准备完成后再安装发布按钮与快捷键保护。其他平台预览提前安装页面保护。平台自己的自动保存草稿仍可能发生。
+
+抖音正式任务在记录提交边界之前安装被动响应监听，只读取浏览器真实产生的 `POST /web/api/media/aweme/create_v2/` 回执，不主动调用发布接口。请求必须属于 `item.common.media_type=43` 的原生文章；HTTP 2xx、响应根字段 `status_code` 为数值 `0` 且 `item_id` 为有效正整数字符串时，记录为 `submitted` 并保留内容 ID。其他状态码或未知格式继续按页面证据核对；响应解析尚未完成时等待，不重复发布。接口接收不表示审核通过，不凭内容 ID 拼接公开链接或标记 `published`。
+
 ## API 约定
 
 所有 JSON 使用 `snake_case`，统一响应格式为：
@@ -186,8 +244,8 @@ sau article resolve TASK_ID --resolution not_published --note "已核对平台�
 | `GET /api/articles` | 最近修改的原稿列表，最多 500 条；CLI 的 `--limit` 在客户端限制展示数量 |
 | `GET /api/articles/{id}` | 原稿及清理后的 `content_html`、修订号 |
 | `PATCH /api/articles/{id}` | 原稿字段及必须的 `expected_revision`；修订冲突拒绝更新 |
-| `GET /api/article-accounts` | 四个平台的已有账号，含 `id,platform,user_name,status`，不返回 Cookie 路径；CLI 在客户端按 `--platform` 筛选 |
-| `GET /api/article-capabilities` | `data={"platforms":[...]}`；平台标题、封面、支持格式与限制，首版均含 `scheduled:false,live_verified:false` |
+| `GET /api/article-accounts` | 八个平台的已有账号，含 `id,platform,user_name,status`，不返回 Cookie 路径；CLI 在客户端按 `--platform` 筛选 |
+| `GET /api/article-capabilities` | `data={"platforms":[...]}`；标题、封面、格式、`option_fields`、`permission_check`、`verification`、`scheduled` 与 `live_verified` |
 | `POST /api/articles/{id}/publish` | `revision,targets,mode,idempotency_key`；返回批次与各账号任务 |
 | `GET /api/article-publish-batches/{id}` | 批次、各账号状态、错误、截图和平台链接 |
 | `GET /api/article-publish-batches?article_id={id}` | 查询某一原稿的批次记录；省略参数则查询全部近期批次 |
@@ -225,22 +283,24 @@ SQLite 通过增量建表增加 `articles`、`article_assets`、`article_asset_r
 
 ## 验证范围
 
-本次在 macOS 上验证了以下范围：
+本次八平台接入包含离线及受控浏览器验证；这些验证不能替代真实平台结果。仓库中的验证范围如下：
 
 | 验证层 | 实际验证内容 |
 | --- | --- |
-| API / CLI | 临时 SQLite、真实 Flask 路由、模拟四平台回执；原稿修订、图片保护、快照、幂等、单账号失败、安全重试及服务中断恢复 |
+| API / CLI | 临时 SQLite、Flask 路由、模拟平台回执；原稿修订、图片保护、快照、幂等、平台注册、单账号失败、安全重试及服务中断恢复 |
 | 浏览器适配 | 本地 Chrome 受控页面；富文本粘贴、原生表格 / 代码、PNG 回退、长块分段、图片上传和错位阻止、标题 / 声明 / 话题读回、预览禁止提交 |
+| 原生文章提交边界 | 受控 mock；未知平台拒绝、歧义按钮拒绝、持久化失败不点击、点击异常不重试、微博下一步 / 最终发布分别处理、默认配套微博文字读回 |
 | 网页 | 隔离后端与假账号；保存刷新、正文图 / 封面、留空继承、重复点击、失败隔离、宽窄屏布局与浏览器错误检查 |
 | 兼容性 | 现有视频 CLI、账号登录相关自动测试；已有账号和视频素材表增量升级后保留 |
-| 真实平台 | 百家号、知乎、头条、搜狐均未使用真实账号预览或正式发布 |
+| 真实平台 | 抖音完整真实预览通过：标题、正文三图顺序、完整正文、平台 CDN 图片与高清封面均已读回，`submit_started=0`；正式发布已取得明确提交回执，公开文章已现场核实。未验收真实话题或声明；其他七平台缺少验收账号 |
 
-四个平台首版能力均明确标记 `live_verified:false`，真实账号预览、审核回执和正式发表需要按实际账号逐项验收，单个平台通过不代表其余平台通过，也不代表 Windows、macOS、Linux 全部通过。[可复用验收稿](../tests/fixtures/article-acceptance/README.md)包含三张正文图片、封面、表格及代码块，标题明确标注测试用途。
+能力接口的 `live_verified` 与 `verification.preview/submitted/published` 分别记录验收范围；实际返回值以运行版本为准，真实任务证据见验证记录。代码中存在选择器、真实编辑器打开、受控测试通过，都不能直接认定真实提交或公开发表。逐平台最新结果见[文章平台验证记录](./article-platform-verification.md)。单个平台通过不代表其余平台通过，也不代表 Windows、macOS、Linux 全部通过。[可复用验收稿](../tests/fixtures/article-acceptance/README.md)包含三张正文图片、封面、表格及代码块，标题明确标注测试用途。
 
 离线回归命令：
 
 ```bash
 python -m unittest discover -s tests -v
+python -m unittest tests.test_native_articles -v
 # 可选本地 Chrome 模拟测试，仅访问受控测试页面。
 # Linux / macOS：
 OMNIPOST_BROWSER_TESTS=1 python -m unittest tests.test_article_adapter -v

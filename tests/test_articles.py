@@ -120,6 +120,106 @@ class ArticlesTest(unittest.TestCase):
         self.assertTrue(batch["tasks"][0]["retry_allowed"])
         self.assertEqual(self.service.retry(task["id"])["tasks"][0]["status"], "queued")
 
+    def submitted_batch(self):
+        """模拟一个已受理账号与一个提交前失败账号，不访问真实平台。"""
+        def run(snapshot, cookie, assets, on_submit, directory):
+            if snapshot["platform"] == "toutiao":
+                raise RuntimeError("提交前失败")
+            on_submit()
+            return {"status": "submitted", "platform_id": "article-platform-id", "message": "平台已受理"}
+        self.service.runner = run
+        batch = self.publish(targets=[{"platform": "zhihu", "account_id": 1}, {"platform": "toutiao", "account_id": 2}])
+        self.service.acquire()
+        while self.service.run_next():
+            pass
+        return self.service.get_batch(batch["id"])
+
+    def test_submitted_confirmation_preserves_submission_and_isolates_failure(self):
+        """链接核查只升级已受理任务，保留平台编号、提交次数及其他账号失败记录。"""
+        before = self.submitted_batch()
+        tasks = {task["platform"]: task for task in before["tasks"]}
+        submitted, failed = tasks["zhihu"], tasks["toutiao"]
+        result = self.service.resolve(submitted["id"], {"resolution": "published", "note": "公开页面核实全文和图片",
+            "platform_url": "https://example.com/article/1"})
+        after = {task["platform"]: task for task in result["tasks"]}
+        self.assertEqual(after["zhihu"]["status"], "published")
+        self.assertEqual(after["zhihu"]["platform_url"], "https://example.com/article/1")
+        self.assertEqual(after["zhihu"]["stage"], "resolved")
+        self.assertIn("公开页面核实全文和图片", after["zhihu"]["message"])
+        for field in ("platform_id", "submit_started", "attempts"):
+            self.assertEqual(after["zhihu"][field], submitted[field])
+        self.assertEqual(after["zhihu"]["platform_id"], "article-platform-id")
+        self.assertTrue(after["zhihu"]["submit_started"])
+        self.assertFalse(after["zhihu"]["retry_allowed"])
+        self.assertEqual(after["toutiao"], failed)
+        with self.assertRaises(ArticleError):
+            self.service.retry(submitted["id"])
+        with self.assertRaises(ArticleError):
+            self.publish(key="确认后重复发布")
+
+    def test_submitted_confirmation_rejects_downgrade_and_retry(self):
+        """已受理任务不能被人工核查降为未发表或失败后重新提交。"""
+        before = self.submitted_batch()
+        task = next(task for task in before["tasks"] if task["status"] == "submitted")
+        for resolution in ("not_published", "submitted", "failed"):
+            with self.subTest(resolution=resolution), self.assertRaises(ArticleError):
+                self.service.resolve(task["id"], {"resolution": resolution, "note": "核查说明",
+                    "platform_url": "https://example.com/article/1"})
+            self.assertEqual(self.service.get_batch(before["id"]), before)
+        with self.assertRaises(ArticleError):
+            self.service.retry(task["id"])
+
+    def test_submitted_confirmation_requires_note_and_http_link(self):
+        """说明或完整文章链接缺失时不改变状态，也不接受本地及脚本链接。"""
+        before = self.submitted_batch()
+        task = next(task for task in before["tasks"] if task["status"] == "submitted")
+        invalid = [{}, {"platform_url": ""}, {"platform_url": " "}, {"platform_url": None},
+                   {"platform_url": "file:///tmp/a"}, {"platform_url": "javascript:alert(1)"},
+                   {"platform_url": "https:///article/1"}, {"platform_url": "https://example.com/a", "note": " "}]
+        for fields in invalid:
+            with self.subTest(fields=fields), self.assertRaises(ArticleError):
+                self.service.resolve(task["id"], {"resolution": "published", "note": "已核查", **fields})
+            self.assertEqual(self.service.get_batch(before["id"]), before)
+
+    def test_published_repeat_confirmation_does_not_rewrite_record(self):
+        """重复确认已发表任务返回冲突，不覆盖第一次核查证据或重新排队。"""
+        batch = self.submitted_batch()
+        task = next(task for task in batch["tasks"] if task["status"] == "submitted")
+        before = self.service.resolve(task["id"], {"resolution": "published", "note": "第一次核查",
+            "platform_url": "http://example.com/article/1"})
+        with self.assertRaises(ArticleError) as error:
+            self.service.resolve(task["id"], {"resolution": "published", "note": "重复核查",
+                "platform_url": "https://example.com/article/2"})
+        self.assertEqual(error.exception.status, 409)
+        self.assertEqual(self.service.get_batch(batch["id"]), before)
+
+    def test_failed_task_cannot_be_confirmed_published(self):
+        """新确认入口仍拒绝把提交前失败的账号伪装成成功。"""
+        before = self.submitted_batch()
+        task = next(task for task in before["tasks"] if task["status"] == "failed")
+        with self.assertRaises(ArticleError) as error:
+            self.service.resolve(task["id"], {"resolution": "published", "note": "核查说明",
+                "platform_url": "https://example.com/article/1"})
+        self.assertEqual(error.exception.status, 409)
+        self.assertEqual(self.service.get_batch(before["id"]), before)
+
+    def test_unknown_resolution_keeps_existing_optional_link_contract(self):
+        """未知结果仍可按既有约定核查为未发表、已受理或已发表，不新增链接必填要求。"""
+        batch = self.submitted_batch()
+        task = next(task for task in batch["tasks"] if task["status"] == "submitted")
+        for resolution, status, started in (("not_published", "failed", 0), ("submitted", "submitted", 1),
+                                             ("published", "published", 1)):
+            with self.subTest(resolution=resolution):
+                with self.service.store.connect(write=True) as conn:
+                    conn.execute("UPDATE article_publish_tasks SET status='unknown',submit_started=1 WHERE id=?", (task["id"],))
+                resolved = self.service.resolve(task["id"], {"resolution": resolution, "note": "按既有流程核查"})
+                current = next(item for item in resolved["tasks"] if item["id"] == task["id"])
+                self.assertEqual(current["status"], status)
+                self.assertEqual(current["submit_started"], started)
+                self.assertEqual(current["retry_allowed"], resolution == "not_published")
+                self.assertEqual(current["platform_id"], task["platform_id"])
+                self.assertEqual(current["attempts"], task["attempts"])
+
     def test_preview_and_one_failed_account_do_not_stop_other(self):
         """模拟适配器验证串行隔离，并区分预览与平台受理。"""
         def run(snapshot, cookie, assets, on_submit, directory):
@@ -166,8 +266,8 @@ class ArticlesTest(unittest.TestCase):
         with other.store.connect() as conn:
             self.assertEqual(tuple(conn.execute("SELECT * FROM file_info").fetchone()), (7, "旧视频素材.mp4"))
 
-    def test_acceptance_fixture_all_four_platforms(self):
-        """真实测试稿走四平台模拟任务，验证正文图片、封面和快照，而非实际外部发布。"""
+    def test_acceptance_fixture_all_eight_platforms(self):
+        """真实测试稿走八平台模拟任务，验证正文图片、封面和快照，而非实际外部发布。"""
         root = Path(__file__).parent / "fixtures" / "article-acceptance"
         content = (root / "原稿.md").read_text(encoding="utf-8")
         assets = []
@@ -182,9 +282,12 @@ class ArticlesTest(unittest.TestCase):
         self.assertIn("<pre><code", self.article["content_html"])
         with self.service.store.connect(write=True) as conn:
             conn.executemany("INSERT INTO user_info VALUES (?,?,?,?,?)", [
-                (3, 5, "a.json", "百家号测试账号", 1), (4, 8, "b.json", "搜狐测试账号", 1)])
+                (3, 5, "a.json", "百家号测试账号", 1), (4, 8, "b.json", "搜狐测试账号", 1),
+                (5, 3, "a.json", "抖音测试账号", 1), (6, 6, "b.json", "B站测试账号", 1),
+                (7, 10, "a.json", "微博测试账号", 1), (8, 11, "b.json", "企鹅号测试账号", 1)])
         targets = [{"platform": platform, "account_id": account} for platform, account in
-                   [("zhihu", 1), ("toutiao", 2), ("baijiahao", 3), ("sohu", 4)]]
+                   [("zhihu", 1), ("toutiao", 2), ("baijiahao", 3), ("sohu", 4),
+                    ("douyin", 5), ("bilibili", 6), ("weibo", 7), ("qiehao", 8)]]
         observed = []
         def runner(snapshot, cookie, managed_assets, on_submit, directory):
             observed.append((snapshot["platform"], snapshot["mode"]))
@@ -197,13 +300,13 @@ class ArticlesTest(unittest.TestCase):
         self.service.runner = runner
         self.service.acquire()
         for mode in ("preview", "publish"):
-            batch = self.publish(key=f"四平台验收-{mode}", mode=mode, targets=targets)
+            batch = self.publish(key=f"八平台验收-{mode}", mode=mode, targets=targets)
             while self.service.run_next():
                 pass
             tasks = self.service.get_batch(batch["id"])["tasks"]
             expected = "previewed" if mode == "preview" else "submitted"
-            self.assertEqual([task["status"] for task in tasks], [expected] * 4)
-        self.assertEqual(len(observed), 8)
+            self.assertEqual([task["status"] for task in tasks], [expected] * 8)
+        self.assertEqual(len(observed), 16)
 
     def test_schedule_explicitly_rejected(self):
         with self.assertRaises(ArticleError):
@@ -345,7 +448,7 @@ class ArticlesTest(unittest.TestCase):
         self.assertEqual(client.get("/api/articles").json["data"][0]["id"], self.article["id"])
         self.assertEqual(client.patch(f'/api/articles/{self.article["id"]}', json={"expected_revision": 0}).status_code, 409)
         caps = client.get("/api/article-capabilities").json["data"]["platforms"]
-        self.assertEqual(len(caps), 4)
+        self.assertEqual(len(caps), 8)
         self.assertTrue(all(not item["scheduled"] for item in caps))
 
 

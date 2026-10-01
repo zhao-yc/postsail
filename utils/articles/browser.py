@@ -126,7 +126,8 @@ class PreparedDocument:
 
 
 async def prepare_document(render_page, content_html: str, assets: dict,
-                           evidence_dir: Path, font: str, preserve_blocks: bool = False) -> PreparedDocument:
+                           evidence_dir: Path, font: str, preserve_blocks: bool = False,
+                           links_as_text: bool = False) -> PreparedDocument:
     """在隔离的本地页把表格和代码分段截图，再生成可粘贴的文章。"""
     validate_assets(content_html, assets)
     # 禁止渲染文章时访问外部资源；原图只读取已验证的本地素材。
@@ -138,9 +139,16 @@ async def prepare_document(render_page, content_html: str, assets: dict,
         encoded = base64.b64encode(Path(asset["path"]).read_bytes()).decode("ascii")
         local_images[asset_id] = f"data:{asset['mime_type']};base64,{encoded}"
     await render_page.evaluate(
-        """({content, images, font}) => {
+        """({content, images, font, linksAsText}) => {
             const root = document.getElementById('article');
             root.innerHTML = content;
+            // 用户显式启用后保留链接文字及地址，原稿不会被改写。
+            if (linksAsText) root.querySelectorAll('a[href]').forEach(link => {
+                const target = link.getAttribute('href');
+                const nodes = Array.from(link.childNodes);
+                if (link.textContent.trim() !== target) nodes.push(document.createTextNode('（' + target + '）'));
+                link.replaceWith(...nodes);
+            });
             const style = document.createElement('style');
             style.textContent = `body{margin:24px;background:white;color:#111}
                 #article{width:920px;font:18px/1.6 ${font}}
@@ -153,7 +161,8 @@ async def prepare_document(render_page, content_html: str, assets: dict,
             root.querySelectorAll('img').forEach(img => {
                 const id = img.getAttribute('data-asset-id'); img.src = images[id];
             });
-        }""", {"content": content_html, "images": local_images, "font": font})
+        }""", {"content": content_html, "images": local_images, "font": font,
+                  "linksAsText": links_as_text})
     await render_page.evaluate("document.fonts.ready")
     await render_page.evaluate("Promise.all(Array.from(document.images).map(img=>img.decode()))")
     # 分段上限约 1200px；表格优先沿行边界，代码沿行高边界拆分。
@@ -227,10 +236,10 @@ async def prepare_document(render_page, content_html: str, assets: dict,
 
 async def prepare_and_paste_document(page, editor, render_page, content_html: str,
                                      assets: dict, evidence_dir: Path, font: str,
-                                     on_prepared=None) -> PreparedDocument:
+                                     on_prepared=None, links_as_text: bool = False) -> PreparedDocument:
     """优先原生表格/代码，仅正文或格式核验失败时改为 PNG 版本重填。"""
     document = await prepare_document(render_page, content_html, assets, evidence_dir, font,
-                                      preserve_blocks=True)
+                                      preserve_blocks=True, links_as_text=links_as_text)
     if on_prepared:
         on_prepared(document)
     try:
@@ -238,7 +247,7 @@ async def prepare_and_paste_document(page, editor, render_page, content_html: st
     except PreparationError:
         # 此处尚未开始正文图片上传，更没有正式提交，重新填写不会重复发文。
         document = await prepare_document(render_page, content_html, assets, evidence_dir, font,
-                                          preserve_blocks=False)
+                                          preserve_blocks=False, links_as_text=links_as_text)
         if on_prepared:
             on_prepared(document)
         await paste_rich_html(page, editor, document)
@@ -323,16 +332,20 @@ def normalize_code_text(text: str) -> str:
     return "\n".join(lines)
 
 
-async def body_sequence(editor) -> str:
-    """把实际图片按位置替换回标记，用完整正文序列核对图片相邻段落。"""
-    return await editor.evaluate("""el => {
+async def body_sequence(editor, platform: str | None = None, *, include_images: bool = True) -> str:
+    """按正文顺序读回；仅排除已核实的编辑控件，平台警告仍须阻止发布。"""
+    return await editor.evaluate("""(el, options) => {
         let index=0,out='';const visit=node=>{
             if(node.nodeType===Node.TEXT_NODE){out+=node.textContent;return;}
             if(node.nodeType!==Node.ELEMENT_NODE)return;
-            if(node.tagName==='IMG'){out+='OMNIPOSTIMAGE'+String(index++).padStart(4,'0')+'END';return;}
+            // 抖音图片节点内的编辑按钮不是正文，不屏蔽其它按钮或警告文字。
+            if(options.platform==='douyin' && node.matches('.node-image button[title="编辑图片"]')) return;
+            if(node.tagName==='IMG'){
+                if(options.includeImages)out+='OMNIPOSTIMAGE'+String(index++).padStart(4,'0')+'END';return;
+            }
             for(const child of node.childNodes)visit(child);
         };visit(el);return out;
-    }""")
+    }""", {"platform": platform, "includeImages": include_images})
 
 
 async def _clipboard_image(page, render_page, path: Path) -> None:
@@ -390,16 +403,20 @@ async def insert_body_images(page, editor, render_page, document: PreparedDocume
             await page.wait_for_timeout(500)
         if not uploaded:
             raise PreparationError("平台正文图片上传未确认完成，已阻止发布；请检查预览截图")
-    actual = await editor.inner_text()
+    actual = await body_sequence(editor, platform, include_images=False)
     if any(marker in actual for marker in document.markers):
         raise PreparationError("平台没有替换正文图片标记，已阻止发布")
     if normalize_text(actual) != normalize_text(document.expected_text):
         raise PreparationError("插图后正文内容不一致，已阻止发布")
-    if normalize_text(await body_sequence(editor)) != normalize_text(inspect_text(document.paste_html)):
+    if normalize_text(await body_sequence(editor, platform)) != normalize_text(inspect_text(document.paste_html)):
         raise PreparationError("正文图片位置与相邻段落不一致，已阻止发布")
 
 
 IMAGE_HOST_SUFFIXES = {
+    "douyin": ("douyinpic.com", "douyin.com", "byteimg.com", "ibytedtos.com", "pstatp.com", "bytecdn.cn"),
+    "bilibili": ("hdslb.com", "biliimg.com", "bilibili.com"),
+    "weibo": ("sinaimg.cn", "sinaimg.com", "weibo.com"),
+    "qiehao": ("qpic.cn", "qq.com", "gtimg.com"),
     "baijiahao": ("bcebos.com", "bdstatic.com", "baidu.com"),
     "zhihu": ("zhimg.com", "zhihu.com"),
     "toutiao": ("byteimg.com", "toutiaoimg.com", "toutiao.com", "pstatp.com", "ibytedtos.com", "bytecdn.cn"),
@@ -418,6 +435,15 @@ def is_uploaded_image(item: dict, platform: str | None = None) -> bool:
     return any(host == suffix or host.endswith("." + suffix) for suffix in IMAGE_HOST_SUFFIXES.get(platform, ()))
 
 
+async def install_native_preview_request_guard(page, platform: str) -> bool:
+    """已核实的原生提交入口直接阻断；保护生效后可延后修改平台编辑器 DOM。"""
+    if platform != "douyin":
+        return False
+    endpoint = re.compile(r"^https://creator\.douyin\.com/web/api/media/aweme/create_v2/(?:\?.*)?$")
+    await page.route(endpoint, lambda route: route.abort("blockedbyclient"))
+    return True
+
+
 async def install_preview_guard(page) -> None:
     """预览只允许编辑和自动保存草稿，阻止人工误点发布按钮或发布热键。"""
     await page.add_init_script(_PREVIEW_GUARD)
@@ -434,7 +460,7 @@ async def install_preview_guard(page) -> None:
 
 _PREVIEW_GUARD = """(() => {
     if(window.__omnipostPreviewGuard)return;window.__omnipostPreviewGuard=true;
-    const isPublish=el=>el && /^(立即|确认|定时)?发布$/.test((el.innerText||el.textContent||'').trim());
+    const isPublish=el=>el && /^(?:(?:立即|确认|确定|定时)?(?:发布|投稿)(?:文章|图文)?|提交审核|提交发布)$/.test((el.innerText||el.textContent||'').trim());
     const guard=event=>{let el=event.target;while(el&&el!==document.body){
         if(isPublish(el)){event.preventDefault();event.stopImmediatePropagation();return;}
         el=el.parentElement;}};
@@ -445,7 +471,14 @@ _PREVIEW_GUARD = """(() => {
     const disable=()=>document.querySelectorAll('button,[role=button],a').forEach(el=>{
         if(isPublish(el)){el.setAttribute('aria-disabled','true');el.style.pointerEvents='none';
             if(el.tagName==='BUTTON')el.disabled=true;}});
-    new MutationObserver(disable).observe(document.documentElement,{subtree:true,childList:true});disable();
+    // 初始化脚本可能早于根节点创建；事件拦截立即生效，观察器在 DOM 可用后安装。
+    const observe=()=>{
+        if(!document.documentElement)return;
+        new MutationObserver(disable).observe(document.documentElement,{subtree:true,childList:true});
+        disable();
+    };
+    if(document.documentElement)observe();
+    else document.addEventListener('DOMContentLoaded',observe,{once:true});
 })()"""
 
 
@@ -491,7 +524,8 @@ async def has_visible_challenge(page, feedback: list[str]) -> bool:
 async def read_result_evidence(page, platform: str, expected_title: str = "") -> dict:
     """只接受明确发布反馈或文章地址；没有证据时保持未知结果。"""
     body = await page.locator("body").inner_text()
-    feedback = await page.locator('[role="alert"],.ant-message,.cheetah-message,[class*="toast"]').evaluate_all(_EXTERNAL_RECEIPT_TEXTS)
+    feedback = await page.locator('[role="alert"],.ant-message,.cheetah-message,.n-message,'
+        '.el-message,.vui_message,[class*="toast"]').evaluate_all(_EXTERNAL_RECEIPT_TEXTS)
     if await has_visible_challenge(page, feedback):
         return {"status": "needs_action", "message": "平台要求人工验证，请核对平台记录后处理"}
     # 页面说明中的“发布成功”不算结果；必须来自反馈区域或独立的成功标题。
@@ -504,6 +538,10 @@ async def read_result_evidence(page, platform: str, expected_title: str = "") ->
         if term in feedback_statuses:
             return {"status": "failed", "message": f"平台反馈：{term}", "platform_status": term}
     patterns = {
+        "douyin": r"^https://(?:www\.)?douyin\.com/article/(\d+)(?:[/?#]|$)",
+        "bilibili": r"^https://(?:www\.)?bilibili\.com/(?:read/cv|opus/)(\d+)(?:[/?#]|$)",
+        "weibo": r"^https://(?:www\.)?weibo\.com/ttarticle/p/show\?[^#]*\bid=(\d+)",
+        "qiehao": r"^https://(?:new\.qq\.com/(?:rain/)?a/|page\.om\.qq\.com/page/)([A-Za-z0-9_-]+)(?:\.html)?(?:[/?#]|$)",
         "zhihu": r"^https://zhuanlan\.zhihu\.com/p/(\d+)(?:[/?#]|$)",
         "baijiahao": r"^https://baijiahao\.baidu\.com/s\?[^#]*\bid=(\d+)",
         "toutiao": r"^https://(?:www\.)?toutiao\.com/article/(\d+)(?:[/?#]|$)",

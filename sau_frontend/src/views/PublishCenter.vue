@@ -1,5 +1,8 @@
 <template>
   <div class="publish-center">
+    <el-alert type="info" :closable="false" class="article-entry">
+      <template #title>抖音、B站、百家号、今日头条、微博、知乎、企鹅号、搜狐的文章发布请使用 <router-link to="/articles">文章工作台</router-link>。</template>
+    </el-alert>
     <!-- Tab管理区域 -->
     <div class="tab-management">
       <div class="tab-header">

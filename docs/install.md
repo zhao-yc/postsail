@@ -74,7 +74,7 @@ Linux / macOS：
 PLAYWRIGHT_DOWNLOAD_HOST="https://npmmirror.com/mirrors/playwright" patchright install chromium
 ```
 
-百家号、知乎、今日头条、搜狐号的文章适配器使用 Playwright，按显式 `LOCAL_CHROME_PATH` → 系统 Chrome → 已安装 Playwright Chromium 选择浏览器。显式路径无效会提示修正；只有未配置路径且系统 Chrome 未安装时才回退 Chromium。需要 Chromium 回退时，在运行后端的机器执行：
+抖音、B站、百家号、今日头条、微博、知乎、企鹅号、搜狐号的文章适配器使用 Playwright，按显式 `LOCAL_CHROME_PATH` → 系统 Chrome → 已安装 Playwright Chromium 选择浏览器。显式路径无效会提示修正；只有未配置路径且系统 Chrome 未安装时才回退 Chromium。需要 Chromium 回退时，在运行后端的机器执行：
 
 ```bash
 python -m playwright install chromium
@@ -96,6 +96,7 @@ Windows 也可以直接手动复制并重命名。
 
 - `LOCAL_CHROME_PATH`
 - `LOCAL_CHROME_HEADLESS`
+- `BILIBILI_TERMINAL_COMMAND`：Linux 上打开 B站扫码登录终端的参数列表，例如 `["gnome-terminal", "--"]`
 - `DEBUG_MODE`
 - `ARTICLE_BROWSER_HEADLESS`：文章浏览器是否隐藏
 - `ARTICLE_RENDER_FONT`：表格、代码截图字体，部署环境需有对应中文字体
@@ -166,6 +167,9 @@ sau bilibili upload-video --account <account_name> --file videos/demo.mp4 --titl
 - 首次运行 Bilibili 相关命令时，程序会自动下载 `biliup`
 - 后续运行会自动检查上游 release 并自动更新
 - Bilibili 登录建议由用户自己在本地真实终端里执行；如果终端里的二维码显示不完整，可直接打开当前目录下的 `qrcode.png` 扫码
+- 网页登录在 Windows 打开新控制台，macOS 使用 Terminal；Linux 优先使用配置的 `BILIBILI_TERMINAL_COMMAND`，否则尝试 `x-terminal-emulator`
+- 无图形终端或浏览器的后端可以在有界面的电脑完成登录，再通过网页「账号管理」导入会话 JSON；终端不可用时界面会提示导入，不会把启动失败视为登录成功
+- B站文章兼容标准 Playwright `storage_state` 及 `biliup` 的 `cookie_info.cookies`；文章只在内存中转换 `biliup` 会话，不覆盖视频上传需要的原始 token 字段
 - 如果国内网络访问 GitHub Release 较慢，可先用 `https://gh-proxy.com/` 或 `https://gh-proxy.org/` 辅助访问对应 release 地址排障
 - 示例：
   - `https://gh-proxy.org/https://github.com/biliup/biliup/releases/download/v1.1.29/biliupR-v1.1.29-aarch64-linux.tar.xz`
@@ -196,7 +200,9 @@ sau article publish ARTICLE_ID --targets ./targets.json --preview --idempotency-
 sau article status BATCH_ID --wait --json
 ```
 
-服务地址通过 `--server` 或 `OMNIPOST_API_URL` 配置。百家号、知乎、今日头条、搜狐号文章默认立即发布、预览可选，定时请求明确不支持。四个平台的真实账号预览和正式发布尚未验收。完整 API、CLI、目标文件及备份迁移见[独立多平台文章发布](./articles.md)。
+服务地址通过 `--server` 或 `OMNIPOST_API_URL` 配置。八平台文章默认立即发布、预览可选，定时请求明确不支持。抖音完整真实预览已通过，正式发布已取得明确提交回执，公开文章已现场核实；本次未验收真实原生话题或声明，其他七平台缺少验收账号。后续实际结果集中记录于[文章平台验证记录](./article-platform-verification.md)。完整 API、CLI、目标文件及备份迁移见[独立多平台文章发布](./articles.md)。
+
+微博新增账号类型为 `10`，企鹅号为 `11`，原有编号保持兼容；企鹅号与微信视频号（类型 `2`）使用不同入口和账号记录。网页登录需手动完成认证，导入会话还会校验 JSON 结构、目标域名和真实登录状态；Cookie 字段存在不能证明有文章权限。普通平台导入 Playwright `storage_state` JSON（含 `cookies`、`origins`），B站也可导入 `biliup` JSON，文件上限为 5MB。校验失败不会覆盖已有凭据。账号 API 不返回 Cookie 内容，会话文件不能提交公开仓库。
 
 ## For AI Agents
 

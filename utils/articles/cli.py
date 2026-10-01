@@ -18,7 +18,7 @@ from urllib.parse import unquote, urlsplit
 import requests
 
 
-ARTICLE_PLATFORMS = ("baijiahao", "zhihu", "toutiao", "sohu")
+from .platforms import ARTICLE_PLATFORMS
 DEFAULT_SERVER = "http://127.0.0.1:5409"
 STATUS_LABELS = {
     "queued": "排队中",
@@ -174,10 +174,11 @@ def add_article_parser(platform_parsers) -> None:
     status.add_argument("--timeout", type=_positive_seconds, default=300, help="--wait 截止秒数（默认 300）")
     retry = actions.add_parser("retry", help="安全重试一个失败或已处理的账号任务")
     retry.add_argument("task_id", type=_resource_id)
-    resolve = actions.add_parser("resolve", help="记录对结果待确认任务的人工核查结论")
+    resolve = actions.add_parser("resolve", help="核查未知结果，或凭文章链接将平台已受理任务确认为已发表",
+                                 description="unknown 可记录核查结论；submitted 仅允许 published，须提供说明及 HTTP/HTTPS 文章链接，不会再次发布。")
     resolve.add_argument("task_id", type=_resource_id)
     resolve.add_argument("--resolution", required=True, choices=("not_published", "submitted", "published"))
-    resolve.add_argument("--platform-url", help="核查得到的平台文章链接")
+    resolve.add_argument("--platform-url", help="核查得到的 HTTP/HTTPS 文章链接；确认 submitted 已发表时必填")
     resolve.add_argument("--note", required=True, help="人工核查依据；不会自动再次发布")
     for child in actions.choices.values():
         _add_connection_flags(child, inherited=True)

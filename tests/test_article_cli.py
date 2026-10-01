@@ -337,8 +337,9 @@ class ArticleCliApiIntegrationTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in accounts["data"]], [1])
         self.assertNotIn("filePath", str(accounts))
         code, caps = self.command("capabilities")
-        self.assertEqual(len(caps["data"]["platforms"]), 4)
-        self.assertTrue(all(not item["live_verified"] for item in caps["data"]["platforms"]))
+        self.assertEqual(len(caps["data"]["platforms"]), 8)
+        self.assertEqual({item["platform"] for item in caps["data"]["platforms"] if item["live_verified"]},
+                         {"douyin"})
 
         def runner(snapshot, cookie_file, assets, on_submit, evidence_dir):
             """使用确定的假回执，验证任务状态，绝不访问内容平台。"""

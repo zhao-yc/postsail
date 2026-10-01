@@ -2,15 +2,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from pathlib import Path
 
 from utils.articles.browser import (
-    PreparationError, insert_body_images, install_preview_guard, is_uploaded_image,
+    PreparationError, insert_body_images, install_preview_guard, install_native_preview_request_guard, is_uploaded_image,
     prepare_and_paste_document, read_result_evidence, save_screenshot, launch_article_browser,
-    validate_assets, verify_rich_structure,
+    validate_assets, verify_rich_structure, inspect_content,
 )
-from utils.articles.model import PLATFORMS
+from utils.articles.model import PLATFORMS, validate_options
 
 
 TITLE_LIMITS = {name: (rules["title_min"], rules["title_max"]) for name, rules in PLATFORMS.items()}
@@ -37,11 +38,22 @@ def validate_task(snapshot: dict, assets: dict) -> Path | None:
         raise ValueError("AI 创作声明必须为布尔值")
     if any(options.get(key) for key in ("schedule", "publish_date", "enableTimer")):
         raise ValueError("文章暂不支持定时发布")
+    validate_options(platform, options)
+    parsed = inspect_content(snapshot.get("content_html", ""))
+    if rules.get("body_max_images") and len(parsed.asset_ids) > rules["body_max_images"]:
+        raise ValueError(f"{rules['label']}正文最多包含 {rules['body_max_images']} 张图片")
+    # 转换后的文本还会由平台读回校验，此处先拒绝已知超限的原稿。
+    if rules.get("body_max_chars") and len("".join(parsed.text)) > rules["body_max_chars"]:
+        raise ValueError(f"{rules['label']}正文最多 {rules['body_max_chars']} 字")
+    if rules.get("tags_max") and len(snapshot.get("tags") or []) > rules["tags_max"]:
+        raise ValueError(f"{rules['label']}最多选择 {rules['tags_max']} 个话题")
+    if platform == "douyin" and parsed.links and not options.get("links_as_text"):
+        raise ValueError("抖音原生文章不支持正文超链接，请启用“将不支持的超链接转为文字和完整网址”选项")
     validate_assets(snapshot.get("content_html", ""), assets)
     cover_id = snapshot.get("cover_asset_id")
     if not cover_id:
-        if platform == "baijiahao":
-            raise ValueError("百家号文章必须选择展示封面")
+        if rules["cover_required"]:
+            raise ValueError(f"{rules['label']}文章必须选择展示封面")
         return None
     asset = assets.get(cover_id)
     if not asset:
@@ -54,9 +66,9 @@ def validate_task(snapshot: dict, assets: dict) -> Path | None:
     maximum = PLATFORMS[platform]["cover_max_bytes"]
     if path.stat().st_size > maximum:
         raise ValueError(f"{rules['label']}封面不能超过 {maximum // 1024 // 1024}MB")
-    if platform == "sohu" and (int(asset.get("width") or 0) <= 450 or
-                                int(asset.get("height") or 0) <= 300):
-        raise ValueError("搜狐封面宽高须分别大于 450 和 300 像素")
+    if (int(asset.get("width") or 0) <= rules["cover_min_width"] or
+            int(asset.get("height") or 0) <= rules["cover_min_height"]):
+        raise ValueError(f"{rules['label']}封面尺寸不足，请检查平台要求")
     return path
 
 
@@ -81,10 +93,12 @@ def _create_app(snapshot: dict, account_file: Path, cover: Path | None):
         from uploader.toutiao_uploader.main import TouTiaoArticle
         app = TouTiaoArticle(**shared, work_statements=options.get("statement"))
         statement = app.work_statements[0] if app.work_statements else ""
-    else:
+    elif platform == "sohu":
         from uploader.sohu_uploader.main import SoHuArticle
         app = SoHuArticle(**shared, info_source=options.get("statement"))
         statement = app.info_source
+    else:
+        raise ValueError("不支持的旧文章适配平台")
     if options.get("statement") and statement != options["statement"]:
         raise ValueError("平台声明不支持，不能忽略或回退，请重新选择")
     return app
@@ -116,9 +130,11 @@ async def _open_editor(platform: str, app, page):
             raise PreparationError("今日头条登录已失效，请重新登录账号")
         await _dismiss_overlays(page)
         _frame, editor = await app._find_editor(page)
-    else:
+    elif platform == "sohu":
         await app._open_article_editor(page)
         _frame, editor = await app._find_editor(page)
+    else:
+        raise PreparationError("文章平台没有注册编辑器")
     if editor is None:
         raise PreparationError("未找到平台文章编辑器；请检查登录、权限或页面变化")
     return editor
@@ -140,10 +156,12 @@ async def _apply_options(platform: str, app, page, editor) -> None:
         await app.insert_topics_in_body(page, editor)
         await app.handle_cover(page)
         await app.apply_work_statements(page)
-    else:
+    elif platform == "sohu":
         await app.fill_tags(page)
         await app.handle_cover(page)
         await app.apply_info_source(page)
+    else:
+        raise PreparationError("文章平台没有注册选项处理器")
     await _verify_tags(platform, page, editor, app.tags)
 
 
@@ -299,11 +317,25 @@ async def _submit_once(page, on_submit) -> None:
     await page.wait_for_timeout(3000)
 
 
-async def _verify_final_body(editor, document, platform: str) -> None:
-    """封面及话题操作后再次检查正文，允许平台在文末附加话题。"""
+async def _verify_final_body(editor, document, platform: str, tags: list[str] | None = None) -> None:
+    """封面及话题操作后完整校验正文，仅允许已核实的请求话题后缀。"""
     from utils.articles.browser import normalize_text, is_uploaded_image, body_sequence, inspect_text
-    actual = await editor.inner_text()
-    if not normalize_text(actual).startswith(normalize_text(document.expected_text)):
+    actual = await body_sequence(editor, platform, include_images=False)
+    suffix = ""
+    topic_selectors = {
+        "baijiahao": 'a[data-bjh-box="topic"]',
+        "toutiao": '[data-topic],[data-hashtag],[class*="topic"],[class*="hashtag"],a[href*="topic"]',
+        "bilibili": 'a[data-type="topic"],span[data-type="topic"]',
+    }
+    requested = list(dict.fromkeys(str(tag).strip().strip("#") for tag in (tags or []) if str(tag).strip()))
+    if normalize_text(actual) != normalize_text(document.expected_text) and requested and platform in topic_selectors:
+        # 必须来自官方话题节点且按请求顺序完整匹配；不把纯文本、警告或其它尾注当作话题。
+        selected = await editor.locator(topic_selectors[platform]).evaluate_all("""elements=>
+            elements.filter(el=>!elements.some(parent=>parent!==el&&parent.contains(el)))
+                .map(el=>(el.textContent||'').trim())""")
+        if [text.strip().strip("#") for text in selected] == requested:
+            suffix = "".join(selected)
+    if normalize_text(actual) != normalize_text(document.expected_text + suffix):
         raise PreparationError("平台选项设置后正文不一致，已阻止发布")
     if any(marker in actual for marker in document.markers):
         raise PreparationError("正文仍有未替换的图片标记，已阻止发布")
@@ -313,9 +345,60 @@ async def _verify_final_body(editor, document, platform: str) -> None:
         raise PreparationError("正文图片读回不完整，已阻止发布")
     if [item["src"] for item in images] != document.uploaded_urls:
         raise PreparationError("正文图片地址或顺序发生变化，已阻止发布")
-    if not normalize_text(await body_sequence(editor)).startswith(normalize_text(inspect_text(document.paste_html))):
+    if normalize_text(await body_sequence(editor, platform)) != normalize_text(inspect_text(document.paste_html) + suffix):
         raise PreparationError("正文图片与相邻段落的位置发生变化，已阻止发布")
     await verify_rich_structure(editor, document.paste_html)
+
+
+
+class LegacyArticleAdapter:
+    """旧四平台以相同接口接入，保留已验证的正文准备与平台选项逻辑。"""
+
+    def __init__(self, snapshot, account_file, cover):
+        self.platform = snapshot["platform"]
+        self.app = _create_app(snapshot, account_file, cover)
+        self.title = self.app.title
+        self.cover = cover
+
+    async def open_editor(self, page):
+        """只调用明确注册的旧平台编辑器。"""
+        return await _open_editor(self.platform, self.app, page)
+
+    async def fill_title(self, page):
+        """复用平台标题输入，再由统一流程读回验证。"""
+        await self.app.fill_title(page)
+
+    async def verify_title(self, page):
+        """避免旧上传类静默截断标题。"""
+        await _verify_title(page, self.title)
+
+    async def apply_options(self, page, editor):
+        """应用封面、话题和声明。"""
+        await _apply_options(self.platform, self.app, page, editor)
+
+    async def verify_options(self, page, editor):
+        """读取平台最终选项状态。"""
+        await _verify_options(self.platform, self.app, page, self.cover)
+
+    async def submit(self, page, on_submit):
+        """正式提交一次，交由任务服务保护幂等边界。"""
+        await _submit_once(page, on_submit)
+
+    async def read_result(self, page):
+        """仅认可平台回执或已打开的公开文章。"""
+        return await read_result_evidence(page, self.platform, self.title)
+
+
+def create_adapter(snapshot, account_file, cover):
+    """显式注册八个平台，新增名称不能意外落入另一平台实现。"""
+    from utils.articles.native import create_native_adapter
+    factories = {name: LegacyArticleAdapter for name in ("baijiahao", "zhihu", "toutiao", "sohu")}
+    factories.update({name: lambda data, _account, image: create_native_adapter(data, image)
+                      for name in ("douyin", "bilibili", "weibo", "qiehao")})
+    factory = factories.get(snapshot.get("platform"))
+    if factory is None:
+        raise ValueError("不支持的文章发布平台")
+    return factory(snapshot, account_file, cover)
 
 
 async def _run(snapshot, account_file, assets, on_submit, evidence_dir):
@@ -326,7 +409,7 @@ async def _run(snapshot, account_file, assets, on_submit, evidence_dir):
 
     platform = snapshot["platform"]
     cover = validate_task(snapshot, assets)
-    app = _create_app(snapshot, account_file, cover)
+    adapter = create_adapter(snapshot, account_file, cover)
     evidence_dir.mkdir(parents=True, exist_ok=True)
     result = dict(status="failed", message="文章任务未完成", platform_id=None,
                   platform_url=None, platform_status=None, evidence=[], prepared_html=None)
@@ -338,39 +421,62 @@ async def _run(snapshot, account_file, assets, on_submit, evidence_dir):
         on_submit()
         submitted = True
 
+    from utils.articles.session import load_article_storage_state
+    storage_state = load_article_storage_state(platform, account_file)
     async with async_playwright() as playwright:
         browser = await launch_article_browser(playwright,
             bool(getattr(conf, "ARTICLE_BROWSER_HEADLESS", getattr(conf, "LOCAL_CHROME_HEADLESS", False))),
             getattr(conf, "LOCAL_CHROME_PATH", ""))
-        context = await browser.new_context(storage_state=str(account_file), locale="zh-CN",
-                                            viewport={"width": 1440, "height": 1000})
-        if platform != "sohu":
-            context = await set_init_script(context)
-        page = await context.new_page()
-        render_page = await context.new_page()
+        context = page = editor = None
+        document = None
+        request_guard = False
         try:
+            context = await browser.new_context(storage_state=storage_state, locale="zh-CN",
+                                                viewport={"width": 1440, "height": 1000})
+            if platform != "sohu":
+                context = await set_init_script(context)
+            page = await context.new_page()
+            render_page = await context.new_page()
             if snapshot["mode"] == "preview":
+                request_guard = await install_native_preview_request_guard(page, platform)
+                if not request_guard:
+                    await install_preview_guard(page)
+            editor = await adapter.open_editor(page)
+            if snapshot["mode"] == "preview" and not request_guard:
                 await install_preview_guard(page)
-            editor = await _open_editor(platform, app, page)
-            if snapshot["mode"] == "preview":
+            await page.bring_to_front()
+            # 原生适配器可安排平台专属的准备顺序，最终仍统一读回所有内容。
+            prepare_editor = getattr(adapter, "prepare_editor", None)
+            if prepare_editor:
+                await prepare_editor(page)
+            if request_guard:
+                # 封面准备时请求层已经禁止提交；完成后再禁用编辑器发布按钮。
                 await install_preview_guard(page)
-            await app.fill_title(page)
-            await _verify_title(page, app.title)
+            await adapter.fill_title(page)
+            await adapter.verify_title(page)
 
             def remember_prepared(document):
                 """即使平台拒绝新版本，也保留最终转换稿和分段图片证据。"""
                 result["prepared_html"] = document.prepared_html
                 result["evidence"] = list(document.generated_files)
+                # 只保存文章内容用于核对平台转换，不记录会话或请求凭据。
+                (evidence_dir / "expected-body.html").write_text(document.paste_html, encoding="utf-8")
+                rules = PLATFORMS[platform]
+                if rules.get("body_max_images") and len(document.image_paths) > rules["body_max_images"]:
+                    raise PreparationError(f"{rules['label']}转换后正文图片超过 {rules['body_max_images']} 张，请减少表格或代码分段")
+                if rules.get("body_max_chars") and len(document.expected_text) > rules["body_max_chars"]:
+                    raise PreparationError(f"{rules['label']}转换后正文超过 {rules['body_max_chars']} 字，请调整原稿")
 
             document = await prepare_and_paste_document(
                 page, editor, render_page, snapshot["content_html"], assets, evidence_dir,
                 getattr(conf, "ARTICLE_RENDER_FONT", "Noto Sans CJK SC,PingFang SC,Microsoft YaHei,sans-serif"),
-                on_prepared=remember_prepared)
+                on_prepared=remember_prepared,
+                links_as_text=bool((snapshot.get("options") or {}).get("links_as_text")))
             await insert_body_images(page, editor, render_page, document, platform)
-            await _apply_options(platform, app, page, editor)
-            await _verify_options(platform, app, page, cover)
-            await _verify_title(page, app.title)
-            await _verify_final_body(editor, document, platform)
+            await adapter.apply_options(page, editor)
+            await adapter.verify_options(page, editor)
+            await adapter.verify_title(page)
+            await _verify_final_body(editor, document, platform, snapshot.get("tags") or [])
             name = await save_screenshot(page, evidence_dir, "prepared.png")
             if name:
                 result["evidence"].append(name)
@@ -380,9 +486,9 @@ async def _run(snapshot, account_file, assets, on_submit, evidence_dir):
                 if seconds:
                     await asyncio.sleep(seconds)
             else:
-                await _submit_once(page, mark_submitted)
+                await adapter.submit(page, mark_submitted)
                 for _ in range(20):
-                    state = await read_result_evidence(page, platform, snapshot["title"])
+                    state = await adapter.read_result(page)
                     if state["status"] != "unknown":
                         break
                     await page.wait_for_timeout(500)
@@ -390,16 +496,31 @@ async def _run(snapshot, account_file, assets, on_submit, evidence_dir):
                 name = await save_screenshot(page, evidence_dir, "result.png")
                 if name:
                     result["evidence"].append(name)
-            await context.storage_state(path=str(account_file))
+            # biliup 会话仍由其登录/renew 维护，不能用浏览器 state 覆盖 token_info。
+            if platform != "bilibili":
+                await context.storage_state(path=str(account_file))
         except Exception as exc:
-            name = await save_screenshot(page, evidence_dir, "error.png")
+            name = await save_screenshot(page, evidence_dir, "error.png") if page else None
             if name:
                 result["evidence"].append(name)
+            if editor is not None:
+                try:
+                    # 正文差异须可复查，不能只用截图判断内容完整。
+                    diagnostic = {"text": await editor.inner_text(timeout=3000),
+                                  "html": await editor.inner_html(timeout=3000)}
+                    (evidence_dir / "body-readback.json").write_text(
+                        json.dumps(diagnostic, ensure_ascii=False, indent=2), encoding="utf-8")
+                    result["evidence"].append("body-readback.json")
+                except Exception:
+                    pass
             result.update(status="unknown" if submitted else "needs_action",
                           message=("已尝试提交，请先核对平台记录：" if submitted else "文章准备未完成：") + str(exc))
         finally:
-            await context.close()
-            await browser.close()
+            try:
+                if context is not None:
+                    await context.close()
+            finally:
+                await browser.close()
     return result
 
 

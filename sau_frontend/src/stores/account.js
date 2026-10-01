@@ -11,7 +11,9 @@ export const PLATFORM_TYPES = {
   6: 'B站',
   7: '今日头条',
   8: '搜狐',
-  9: '知乎'
+  9: '知乎',
+  10: '微博',
+  11: '企鹅号'
 }
 
 export const useAccountStore = defineStore('account', () => {
