@@ -2,8 +2,8 @@
   <div class="about">
     <el-card class="about-card">
       <div class="about-header">
-        <h1>自媒体自动化运营系统</h1>
-        <p class="version">social-auto-upload</p>
+        <h1>PostSail · 播舟</h1>
+        <p class="version">一次创作，多端抵达。</p>
       </div>
 
       <el-divider />
@@ -11,8 +11,20 @@
       <div class="about-section">
         <h3>系统简介</h3>
         <p>
-          本系统是一款强大的自动化工具，帮助内容创作者和运营人员一键将视频内容高效发布到多个国内外主流社交媒体平台。
-          支持视频上传、定时发布等功能。
+          PostSail（播舟）是开源的多平台内容发布与运营工具，帮助内容创作者和运营人员管理账号、素材、文章、发布任务、互动消息和数据。
+          各平台的视频、图文、文章与定时能力，以对应平台实际支持范围为准。
+        </p>
+      </div>
+
+      <div class="about-section">
+        <h3>名称与开源来源</h3>
+        <p>
+          Post 表示内容发布，Sail 表示扬帆传播；播舟承载内容，让创作抵达更多平台。
+          本项目基于
+          <a href="https://github.com/rehatRobot/omnipost" target="_blank" rel="noopener noreferrer">OmniPost</a>
+          继续开发，其上游为
+          <a href="https://github.com/dreammis/social-auto-upload" target="_blank" rel="noopener noreferrer">social-auto-upload</a>。
+          感谢原作者与社区贡献者，沿用 MIT 许可证并保留原有版权声明。
         </p>
       </div>
 

@@ -3,7 +3,10 @@ import Dashboard from '../views/Dashboard.vue'
 import AccountManagement from '../views/AccountManagement.vue'
 import MaterialManagement from '../views/MaterialManagement.vue'
 import PublishCenter from '../views/PublishCenter.vue'
+import ArticleManagement from '../views/ArticleManagement.vue'
 import DataCenter from '../views/DataCenter.vue'
+import AnalyticsCenter from '../views/AnalyticsCenter.vue'
+import MessageCenter from '../views/MessageCenter.vue'
 import About from '../views/About.vue'
 
 const routes = [
@@ -28,9 +31,24 @@ const routes = [
     component: PublishCenter
   },
   {
+    path: '/articles',
+    name: 'ArticleManagement',
+    component: ArticleManagement
+  },
+  {
     path: '/data-center',
     name: 'DataCenter',
+    component: AnalyticsCenter
+  },
+  {
+    path: '/content-stats',
+    name: 'ContentStats',
     component: DataCenter
+  },
+  {
+    path: '/messages',
+    name: 'Messages',
+    component: MessageCenter
   },
   {
     path: '/about',

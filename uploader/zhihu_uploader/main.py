@@ -160,9 +160,15 @@ class ZhiHuArticle(object):
         cover_path=None,
         creation_statement=None,
     ):
-        self.title = (title or "").strip()[:TITLE_MAX_LEN]
+        # 文章暂不支持定时；不能把未实现的定时请求降级成立即发布。
+        if publish_date != 0:
+            raise ValueError("知乎文章暂不支持定时发布，请选择立即发布")
+        # 拒绝超限标题，历史直接调用也不能静默截断原稿。
+        self.title = (title or "").strip()
         if not self.title:
             raise ValueError("知乎文章标题不能为空")
+        if len(self.title) > TITLE_MAX_LEN:
+            raise ValueError(f"知乎文章标题需 1-{TITLE_MAX_LEN} 个字")
         self.body = (body or "").strip()
         if not self.body:
             raise ValueError("知乎文章正文不能为空")

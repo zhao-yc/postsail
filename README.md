@@ -1,8 +1,14 @@
-# OmniPost
+# PostSail 播舟
 
-**OmniPost** 是多平台自媒体内容自动发布工具：支持将 **视频 / 图文** 一键发布到 `抖音`、`Bilibili`、`小红书`、`快手`、`视频号`、`百家号`、`今日头条`、`搜狐号`、`知乎`、`TikTok` 等平台，并提供 **Web 管理台**、**统一 CLI（`sau`）** 与 **示例脚本** 三种使用方式。
+> 一次创作，多端抵达。
 
-> 本仓库基于开源项目 [dreammis/social-auto-upload](https://github.com/dreammis/social-auto-upload) 二开。感谢原作者与社区贡献者。
+**PostSail** 是多平台自媒体内容自动发布工具：支持将 **视频 / 图文** 一键发布到 `抖音`、`Bilibili`、`小红书`、`快手`、`视频号`、`百家号`、`今日头条`、`搜狐号`、`知乎`、`TikTok` 等平台，并提供 **Web 管理台**、**统一 CLI（`sau`）** 与 **示例脚本** 三种使用方式。
+
+PostSail（播舟）是开源的多平台内容发布与运营工具。Post 表示内容发布，Sail 表示扬帆传播。
+
+本项目在 [rehatRobot/OmniPost](https://github.com/rehatRobot/omnipost) 的基础上继续开发，原项目基于 [dreammis/social-auto-upload](https://github.com/dreammis/social-auto-upload)。感谢两层上游的作者与社区贡献者，保留原有 MIT 许可证及版权声明。
+
+项目仓库：[zhao-yc/postsail](https://github.com/zhao-yc/postsail)。当前更新品牌展示，兼容既有安装与配置：Python 分发包名仍为 `social-auto-upload`，CLI 入口仍为 `sau`；`OMNIPOST_*` 环境变量、浏览器本地存储键与源码目录名称继续沿用。现有账号、素材和发布记录无需迁移。
 
 <img src="media/show/tkupload.gif" alt="demo" width="800"/>
 
@@ -45,8 +51,11 @@
 
 - **多平台发布**：抖音、B 站、小红书、快手、视频号、百家号、今日头条、搜狐号、知乎、TikTok 等
 - **视频 + 图文**：部分平台支持图文 / 文章（见能力表）
+- **独立文章管理**：富文本原稿、正文图片、平台覆盖项、各账号发布记录；支持 API 和 `sau article`，与官网独立
 - **账号与 Cookie 管理**：Web 扫码 / 导入 Cookie，CLI `login` / `check`
-- **定时发布**：多数平台支持（以各平台后台能力为准）
+- **消息中心**：评论与私信收件箱、人工回复、自动回复策略、话术库与消息提醒；按平台和账号权限开放，见[功能与验证范围](./docs/operations.md)
+- **数据中心**：仪表盘、账号与作品快照、观测增量、排行榜、当前负责人汇总、CSV 与机器人周期报表；见[统计口径](./docs/operations.md#数据口径)
+- **定时发布**：原有视频 / 图片笔记按平台支持；百家号、知乎、头条、搜狐文章首版仅立即发布，定时请求明确拒绝
 - **统一 CLI**：`sau <platform> <action>`，便于脚本化与 Agent 调用
 - **可扩展 uploader**：每个平台独立模块，便于二开接入新平台
 
@@ -57,9 +66,12 @@
 | 部分 | 说明 |
 | --- | --- |
 | `sau_backend.py` | Flask API：账号、素材、发布任务 |
-| `sau_frontend/` | Vue3 + Element Plus 管理台（账号 / 素材 / 发布中心） |
+| `sau_frontend/` | Vue3 + Element Plus 管理台（账号 / 素材 / 发布中心 / 文章管理 / 消息中心 / 数据中心） |
 | `uploader/*` | 各平台 Playwright / 专用运行时上传实现 |
 | `sau_cli.py` | 统一 CLI 入口（安装后命令为 `sau`） |
+| `utils/articles/` | 独立文章 API、素材、快照、串行任务与四平台适配器 |
+| `utils/interactions/` | 互动消息、回复审计、自动策略与平台适配器 |
+| `utils/analytics/` | 不可变观测快照、分析查询和机器人周期报表 |
 | `examples/` | 单平台登录 / 上传示例脚本 |
 | `skills/` | 面向 Agent 的平台 Skill（抖音 / 快手 / 小红书 / B 站） |
 | `db/` | SQLite 账号与文件元数据 |
@@ -78,8 +90,8 @@
 ### 1. 克隆与 Python 依赖
 
 ```bash
-git clone https://github.com/rehatRobot/omnipost.git
-cd omnipost
+git clone https://github.com/zhao-yc/postsail.git
+cd postsail
 
 uv venv
 # Windows
@@ -90,7 +102,7 @@ uv venv
 uv pip install -e .
 ```
 
-安装后可直接使用 `sau` 命令（CLI 入口名暂仍为上游的 `sau`，后续可再改为 `omnipost`）。
+安装后可直接使用 `sau` 命令（沿用上游 CLI 入口，兼容既有脚本）。
 
 ### 2. 浏览器驱动
 
@@ -102,10 +114,10 @@ $env:PLAYWRIGHT_DOWNLOAD_HOST="https://npmmirror.com/mirrors/playwright"
 patchright install chromium
 ```
 
-部分平台 / 示例仍可能使用 `playwright`，可按需补充：
+四平台文章使用 `playwright`。运行文章后端先安装 Web 依赖 `uv pip install -e ".[web]"`；浏览器按显式 `LOCAL_CHROME_PATH`、系统 Chrome、已安装 Playwright Chromium 的顺序选择。需要 Chromium 回退时在后端机器运行：
 
 ```bash
-playwright install chromium
+python -m playwright install chromium
 ```
 
 ### 3. 配置与数据库
@@ -123,6 +135,7 @@ python db/createTable.py
 
 ```bash
 # 后端
+uv pip install -e ".[web]"
 python sau_backend.py
 # 默认 http://localhost:5409
 
@@ -132,6 +145,9 @@ npm install
 npm run dev
 # 默认 http://localhost:5173
 ```
+
+VS Code 和 Codex 已提供启动、停止、状态及日志入口，使用方法见
+[编辑器里的本地开发入口](./docs/local-development.md)。这些入口默认使用前端 5175 端口。
 
 ## 快速开始
 
@@ -143,6 +159,8 @@ npm run dev
 4. 在「发布中心」选择平台、填写标题正文、发布或预览（dry-run）
 
 适合日常运营与多账号可视化管理。
+
+长文章使用独立的「文章管理」页面（路由 `/articles`，默认访问 `http://localhost:5173/#/articles`）：保存原稿、插入正文图片、配置各平台标题 / 封面 / 话题 / 声明，再选择账号立即发布或预览。官网独立发布一份，PostSail 独立提交另一份；两边不互相读取。结果分别记录为排队、平台已接收、已发表或待确认，HTTP 受理不代表平台已发表。
 
 ### 方式 B：CLI（当前已接入平台）
 
@@ -160,9 +178,16 @@ sau xiaohongshu upload-note --account <account_name> --images videos/1.png video
 
 sau bilibili login --account <account_name>
 sau bilibili upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --tid 249
+
+# 文章通过 Web 后端，使用网页账号 ID
+sau article accounts --json
+sau article import --file ./draft/article.md --title "示例教程" --cover ./draft/cover.png --json
+sau article publish ARTICLE_ID --targets ./targets.json --preview --idempotency-key draft-preview-01 --json
+sau article publish ARTICLE_ID --targets ./targets.json --idempotency-key draft-publish-01 --json
+sau article status BATCH_ID --wait --json
 ```
 
-更多说明：[CLI 使用说明](./docs/CLI.md)
+更多说明：[CLI 使用说明](./docs/CLI.md) · [文章 API、CLI 与发布记录](./docs/articles.md)。`ARTICLE_ID`、`BATCH_ID` 为上一步返回的字符串 ID；目标文件包含平台和网页账号 ID。服务地址通过 `--server` 或 `OMNIPOST_API_URL` 配置。
 
 约定简述：
 
@@ -173,7 +198,7 @@ sau bilibili upload-video --account <account_name> --file videos/demo.mp4 --titl
 
 ### 方式 C：examples 脚本
 
-适合调试单平台 uploader（头条 / 搜狐 / 知乎 / 百家号图文等尚未全部 CLI 化时，优先用此方式或 Web）：
+适合调试单平台 uploader。四平台长文章已有独立 API / CLI 与网页管理入口，日常多平台发布优先使用 `sau article` 或「文章管理」；以下历史示例可供排查单平台流程：
 
 ```bash
 # 登录示例
@@ -199,19 +224,22 @@ python examples/upload_article_to_baijiahao.py
 | 小红书 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 浏览器自动化 |
 | 快手 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 浏览器自动化 |
 | 视频号 | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ | `tencent_uploader` |
-| 百家号 | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | Web / examples |
-| 今日头条 | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | 图文为「发文章」，非微头条 |
-| 搜狐号 | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ | 仅图文；标题 5–72 字；封面 **大于 450×300**，jpg/jpeg/png，≤10MB |
-| 知乎 | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ | 第一期仅文章 |
+| 百家号 | ✅ | ✅ | ✅ | 文章不支持 | ✅ 文章 | ❌ | `sau article` / Web；文章真实账号尚未验收 |
+| 今日头条 | ✅ | ✅ | ✅ | 文章不支持 | ✅ 文章 | ❌ | 长文章，非微头条；文章真实账号尚未验收 |
+| 搜狐号 | ✅ | ❌ | ✅ | ❌ | ✅ 文章 | ❌ | 标题 5–72 字；可选封面 **大于 450×300**、≤10MB；真实账号尚未验收 |
+| 知乎 | ✅ | ❌ | ✅ | ❌ | ✅ 文章 | ❌ | 文章立即发布 / 可选预览；真实账号尚未验收 |
 | TikTok | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ | 示例偏 Chrome 版实现 |
 
 平台后台改版、风控、账号权限（如实名）会导致自动化失效，属正常现象，需要跟进维护选择器与流程。
+
+能力表表示代码已接入。四平台文章首版仅完成离线及隔离流程验证，能力 API 返回 `live_verified:false`；真实账号的预览、正文图片、平台审核回执和正式发表尚未逐平台验收。
 
 ## 配置说明
 
 - 配置模板：[`conf.example.py`](./conf.example.py) → 复制为 `conf.py`
 - Cookie 目录：`cookies/`（CLI / 示例）与 `cookiesFile/`（Web 账号）
 - 素材目录：常见为 `videoFile/`（以后端实际配置为准）
+- 文章素材与截图：`articleData/`，连同 `db/database.db`、`cookiesFile/` 备份迁移
 - 日志：`logs/`
 
 开源或分享仓库前请确认敏感文件已被忽略，可参考 [`.gitignore`](./.gitignore)。
@@ -223,8 +251,10 @@ python examples/upload_article_to_baijiahao.py
 | [docs/install.md](./docs/install.md) | 安装与环境 |
 | [docs/update.md](./docs/update.md) | 更新说明 |
 | [docs/CLI.md](./docs/CLI.md) | `sau` CLI |
+| [docs/articles.md](./docs/articles.md) | 独立文章管理、API、CLI、任务状态与验收边界 |
+| [docs/operations.md](./docs/operations.md) | 消息中心、数据中心、自动回复与周期报表 |
 | [docs/agent-bootstrap.md](./docs/agent-bootstrap.md) | 交给 AI Agent 的启动提示词 |
-| [docs/legacy-web.md](./docs/legacy-web.md) | 历史 Web 说明 |
+| [docs/legacy-web.md](./docs/legacy-web.md) | 历史 Web 与当前文章管理入口的区别 |
 | [skills/*/SKILL.md](./skills) | 各平台 Agent Skill |
 
 ## AI Agent

@@ -10,6 +10,11 @@ from pathlib import Path
 from queue import Queue
 from flask_cors import CORS
 from myUtils.auth import check_cookie
+from utils.articles.model import ArticleError
+from utils.articles.routes import register_article_routes
+from utils.interactions.routes import register_interaction_routes
+from utils.analytics.routes import register_analytics_routes
+from utils.analytics.push import register_analytics_push_routes
 from flask import Flask, request, jsonify, Response, render_template, send_from_directory
 from conf import BASE_DIR
 from myUtils.login import get_tencent_cookie, douyin_cookie_gen, get_ks_cookie, xiaohongshu_cookie_gen, baijiahao_cookie_gen, bilibili_cookie_gen, toutiao_cookie_gen, sohu_cookie_gen, zhihu_cookie_gen
@@ -70,7 +75,8 @@ app = Flask(__name__)
 
 
 def _db_path():
-    return Path(BASE_DIR / "db" / "database.db")
+    """保留默认数据库位置，允许测试和自部署实例显式使用隔离数据库。"""
+    return Path(app.config.get("OMNIPOST_DB_PATH", BASE_DIR / "db" / "database.db"))
 
 
 def _row_to_stat_item(row):
@@ -489,6 +495,27 @@ def login():
     response.headers['Connection'] = 'keep-alive'
     return response
 
+def _is_article_request(data):
+    """兼容数字或字符串平台类型，搜狐和知乎始终为文章。"""
+    if not isinstance(data, dict):
+        return False
+    try:
+        platform_type = int(data.get('type'))
+    except (TypeError, ValueError):
+        return False
+    return platform_type in (8, 9) or (platform_type in (5, 7) and str(data.get('contentType', '')).strip().lower() == 'article')
+
+
+def _submit_legacy_article(data):
+    """保留旧响应结构，同时返回批次 ID，供旧管理台查询真实结果。"""
+    try:
+        batch = app.extensions['legacy_article_publish'](data)
+        return jsonify({"code": 200, "msg": "文章任务已受理，请查看各平台实际结果",
+                        "data": {**batch, "batchId": batch['id']}}), 200
+    except ArticleError as exc:
+        return jsonify({"code": exc.status, "msg": str(exc), "data": None}), exc.status
+
+
 @app.route('/postVideo', methods=['POST'])
 def postVideo():
     # 获取JSON数据
@@ -496,6 +523,10 @@ def postVideo():
 
     if not data:
         return jsonify({"code": 400, "msg": "请求数据不能为空", "data": None}), 400
+
+    # 旧文章调用也走持久化任务；HTTP 200 仅表示受理，不再使用视频后台线程。
+    if _is_article_request(data):
+        return _submit_legacy_article(data)
 
     # 从JSON数据中提取fileList和accountList
     file_list = data.get('fileList', [])
@@ -790,7 +821,18 @@ def postVideoBatch():
 
     if not isinstance(data_list, list):
         return jsonify({"code": 400, "msg": "Expected a JSON array", "data": None}), 400
+    # 在创建任何任务之前拒绝文章定时，避免半个批次已发布才发现不支持。
+    if any(_is_article_request(item) and (item.get('enableTimer') or item.get('schedule') or item.get('publish_date'))
+           for item in data_list):
+        return jsonify({"code": 400, "msg": "首版文章仅支持立即发布，不支持定时", "data": None}), 400
+    article_batches = []
     for data in data_list:
+        if _is_article_request(data):
+            try:
+                article_batches.append(app.extensions['legacy_article_publish'](data))
+            except ArticleError as exc:
+                return jsonify({"code": exc.status, "msg": str(exc), "data": {"batches": article_batches}}), exc.status
+            continue
         # 从JSON数据中提取fileList和accountList
         file_list = data.get('fileList', [])
         account_list = data.get('accountList', [])
@@ -945,8 +987,8 @@ def postVideoBatch():
     return jsonify(
         {
             "code": 200,
-            "msg": None,
-            "data": None
+            "msg": "文章任务已受理，请查看各平台实际结果" if article_batches else None,
+            "data": {"batches": article_batches} if article_batches else None
         }), 200
 
 # Cookie文件上传API
@@ -1202,7 +1244,8 @@ def sync_content_stats():
     except Exception as e:
         return jsonify({"code": 500, "msg": f"同步失败: {e}", "data": None}), 500
 
-    synced_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    from utils.analytics.store import business_now
+    synced_at = business_now().isoformat(timespec="microseconds")
     try:
         with sqlite3.connect(_db_path()) as conn:
             replace_account_stats(
@@ -1441,5 +1484,44 @@ def sse_stream(status_queue):
             # 避免 CPU 占满
             time.sleep(0.1)
 
+def _refresh_analytics_account(account_id, platform, limit):
+    """复用现有作品采集与登录态，同时采集真实账号粉丝资料。"""
+    from utils.analytics.collectors.profile import collect_account_profile_sync
+    from utils.analytics.service import AnalyticsError
+    meta = SUPPORTED_STATS_PLATFORMS.get(platform)
+    if not meta:
+        raise AnalyticsError("该平台尚未接入作品数据采集", 501)
+    with sqlite3.connect(_db_path()) as conn:
+        row = conn.execute("SELECT type,filePath FROM user_info WHERE id=?", (account_id,)).fetchone()
+    if not row or int(row[0]) != meta["type"]:
+        raise AnalyticsError("账号不存在或平台不匹配", 404)
+    root = Path(BASE_DIR / "cookiesFile").resolve()
+    cookie = (root / row[1]).resolve()
+    if not cookie.is_relative_to(root) or not cookie.is_file():
+        raise AnalyticsError("账号会话不存在，请先重新登录", 401)
+    collector = {"douyin": sync_douyin_content_stats, "kuaishou": sync_kuaishou_content_stats,
+                 "xiaohongshu": sync_xiaohongshu_content_stats, "bilibili": sync_bilibili_content_stats}[platform]
+    items = collector(cookie, limit=limit)
+    try:
+        profile = collect_account_profile_sync(cookie, platform)
+    except Exception:
+        # 粉丝资料依赖额外网页能力，失败不丢弃已经成功采集的作品。
+        profile = {"followerCount": None, "evidence": [], "warnings": ["粉丝资料读取失败，作品数据已采集；请检查浏览器和账号页面权限"]}
+    return {"items": items, "followerCount": profile.get("followerCount"), "evidence": profile.get("evidence", []),
+            "warnings": profile.get("warnings", []), "scope": "partial"}
+
+
+register_article_routes(app, app_conf)
+register_interaction_routes(app, app_conf)
+register_analytics_routes(app, _db_path, account_refresher=_refresh_analytics_account)
+register_analytics_push_routes(app, _db_path, app_conf)
+
 if __name__ == '__main__':
+    # 正常启动即恢复持久化文章队列；模块导入本身不创建线程或写数据库。
+    app.extensions['article_service']()
+    # 运行器恢复已有显式启用配置，新安装默认不采集也不发送。
+    if app.config.get('INTERACTION_WORKER_ENABLED', getattr(app_conf, 'INTERACTION_WORKER_ENABLED', True)):
+        app.extensions['interaction_service']().start()
+    if app.config.get('ANALYTICS_PUSH_WORKER_ENABLED', getattr(app_conf, 'ANALYTICS_PUSH_WORKER_ENABLED', True)):
+        app.extensions['analytics_push_service']().start()
     app.run(host='0.0.0.0' ,port=5409)

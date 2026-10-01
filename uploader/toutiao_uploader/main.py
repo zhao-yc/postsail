@@ -427,7 +427,13 @@ class TouTiaoArticle(object):
         cover_path=None,
         work_statements=None,
     ):
-        self.title = (title or "")[:30]
+        # 原定时填写无法确认成功，文章入口先禁止非零时间避免意外立即发布。
+        if publish_date != 0:
+            raise ValueError("今日头条文章暂不支持定时发布，请选择立即发布")
+        # 拒绝超限标题，历史直接调用也不能静默截断原稿。
+        self.title = (title or "").strip()
+        if not 1 <= len(self.title) <= 30:
+            raise ValueError("今日头条文章标题需 1-30 个字")
         self.body = body or ""
         self.tags = tags or []
         self.publish_date = publish_date

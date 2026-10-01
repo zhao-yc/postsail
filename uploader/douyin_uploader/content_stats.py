@@ -729,8 +729,16 @@ def parse_douyin_list_payload(payload: dict, limit: int = 5) -> list[dict]:
     return items
 
 
-def replace_account_stats(conn, *, platform: str, account_id: int, items: list[dict], synced_at: str) -> None:
+def replace_account_stats(conn, *, platform: str, account_id: int, items: list[dict], synced_at: str,
+                          commit: bool = True) -> None:
+    """兼容原累计缓存，同时保留每次真实采集的历史观测供分析计算。"""
+    from utils.analytics.store import bootstrap_legacy_stats, record_content_snapshot
+
     ensure_content_stats_table(conn)
+    # 删除最近作品缓存前保存旧基线；之后缩小采集范围也不会抹掉历史作品。
+    bootstrap_legacy_stats(conn, platform=platform, account_id=account_id)
+    record_content_snapshot(conn, platform=platform, account_id=account_id,
+                            items=items, synced_at=synced_at)
     conn.execute(
         "DELETE FROM content_stats WHERE platform = ? AND account_id = ?",
         (platform, account_id),
@@ -797,7 +805,9 @@ def replace_account_stats(conn, *, platform: str, account_id: int, items: list[d
                 item.get("raw_json") or "",
             ),
         )
-    conn.commit()
+    # 独立旧接口维持自动提交；分析刷新可与粉丝资料一起原子提交。
+    if commit:
+        conn.commit()
 
 
 MANAGE_URL = "https://creator.douyin.com/creator-micro/content/manage"

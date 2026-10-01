@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Sequence
 
+from utils.articles.cli import add_article_parser, run_article_command
+
 from conf import BASE_DIR
 from uploader.bilibili_uploader.runtime import run_biliup_command
 from uploader.douyin_uploader.main import (
@@ -518,9 +520,11 @@ def build_parser() -> argparse.ArgumentParser:
     schedule_help = SCHEDULE_FORMAT.replace("%", "%%")
     parser = argparse.ArgumentParser(
         prog="sau",
-        description="CLI for social-auto-upload.",
+        description="PostSail 播舟：多平台内容发布命令行工具（兼容 sau 入口）。",
     )
     platform_parsers = parser.add_subparsers(dest="platform", required=True)
+    # 文章命令只调用后端 API，复用已保存的账号与任务状态。
+    add_article_parser(platform_parsers)
 
     douyin_parser = platform_parsers.add_parser("douyin", help="Douyin operations")
     douyin_actions = douyin_parser.add_subparsers(dest="action", required=True)
@@ -656,6 +660,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def dispatch(args: argparse.Namespace) -> int:
+    if args.platform == "article":
+        return run_article_command(args)
+
     if args.platform == "douyin":
         if args.action == "login":
             result = await login_douyin_account(args.account, headless=args.headless)
@@ -884,6 +891,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
     try:
+        # 文章客户端使用同步 HTTP，无需建立视频上传使用的异步事件循环。
+        if args.platform == "article":
+            return run_article_command(args)
         return asyncio.run(dispatch(args))
     except Exception as exc:
         print(str(exc), file=sys.stderr)

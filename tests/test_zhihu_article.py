@@ -55,19 +55,19 @@ class TestZhiHuArticle(unittest.TestCase):
             )
             self.assertEqual(app.creation_statement, "无声明")
 
-    def test_title_truncated_to_100(self):
+    def test_rejects_title_longer_than_100(self):
         with TemporaryDirectory() as td:
             account = Path(td) / "a.json"
             account.write_text("{}", encoding="utf-8")
             long_title = "啊" * 120
-            app = ZhiHuArticle(
-                title=long_title,
-                body="正文",
-                tags=[],
-                publish_date=0,
-                account_file=account,
-            )
-            self.assertEqual(len(app.title), 100)
+            with self.assertRaisesRegex(ValueError, "1-100"):
+                ZhiHuArticle(
+                    title=long_title,
+                    body="正文",
+                    tags=[],
+                    publish_date=0,
+                    account_file=account,
+                )
 
 
 if __name__ == "__main__":

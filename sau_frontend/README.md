@@ -1,6 +1,10 @@
 # Vue3 + Vite 项目
 
+新增 `/#/messages` 消息中心与 `/#/data-center` 数据中心，原统计页保留 `/#/content-stats`。功能和验证范围见[工作台说明](../docs/operations.md)。开发代理支持 `OMNIPOST_BACKEND_URL`，生产沿用 `VITE_API_BASE_URL`。
+
 一个基于 Vue3、Vite、Element Plus、Pinia、Vue Router 和 Axios 的现代化前端项目模板。
+
+当前 PostSail 已提供「文章管理」（路由 `/articles`，哈希地址 `/#/articles`）：Tiptap 富文本原稿、正文图片与封面、平台覆盖项、各账号任务记录及人工核查。百家号、知乎、今日头条、搜狐号文章仅立即发布，预览可选，定时请求明确拒绝；真实账号流程尚未验收。后端安装 `uv pip install -e ".[web]"`，浏览器和 CLI 配置见[独立多平台文章发布](../docs/articles.md)。
 
 ## 🚀 特性
 

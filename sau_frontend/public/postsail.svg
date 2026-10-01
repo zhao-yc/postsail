@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">PostSail 播舟</title>
+  <rect width="64" height="64" rx="14" fill="#002140" />
+  <!-- 两片帆与船身表示内容扬帆，适用于侧边栏和浏览器小图标。 -->
+  <path d="M30 10v30H13Z" fill="#fff" />
+  <path d="M35 17v23h15Z" fill="#409eff" />
+  <path d="M11 45h43l-9 10H21Z" fill="#fff" />
+</svg>

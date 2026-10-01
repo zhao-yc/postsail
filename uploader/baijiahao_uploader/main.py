@@ -609,7 +609,13 @@ class BaiJiaHaoArticle(object):
         cover_path=None,
         ai_generated=False,
     ):
-        self.title = (title or "")[:64]
+        # 文章暂不支持定时；不能把未实现的定时请求降级成立即发布。
+        if publish_date != 0:
+            raise ValueError("百家号文章暂不支持定时发布，请选择立即发布")
+        # 拒绝超限标题，历史直接调用也不能静默截断原稿。
+        self.title = (title or "").strip()
+        if not 2 <= len(self.title) <= 64:
+            raise ValueError("百家号文章标题需 2-64 个字")
         self.body = body or ""
         self.tags = tags or []
         self.publish_date = publish_date

@@ -137,7 +137,7 @@
           <!-- 批量发布进度对话框 -->
           <el-dialog
             v-model="batchPublishDialogVisible"
-            title="批量发布进度"
+            title="批量提交进度"
             width="500px"
             :close-on-click-modal="false"
             :close-on-press-escape="false"
@@ -149,7 +149,7 @@
                 :status="publishProgress === 100 ? 'success' : ''"
               />
               <div v-if="currentPublishingTab" class="current-publishing">
-                正在发布：{{ currentPublishingTab.label }}
+                正在提交：{{ currentPublishingTab.label }}
               </div>
               
               <!-- 发布结果列表 -->
@@ -646,7 +646,7 @@
           </el-dialog>
 
           <!-- 定时发布 -->
-          <div class="schedule-section">
+          <div v-if="!isArticleTab(tab)" class="schedule-section">
             <h3>定时发布</h3>
             <div class="schedule-controls">
               <el-switch
@@ -1388,7 +1388,7 @@ const confirmPublish = async (tab) => {
       const account = accountStore.accounts.find(acc => acc.id === accountId)
       return account ? account.filePath : accountId
     }), // 发送账号的文件路径
-    enableTimer: tab.scheduleEnabled ? 1 : 0,
+    enableTimer: !isArticle && tab.scheduleEnabled ? 1 : 0,
     videosPerDay: tab.scheduleEnabled ? tab.videosPerDay || 1 : 1,
     dailyTimes: tab.scheduleEnabled ? tab.dailyTimes || ['10:00'] : ['10:00'],
     startDays: tab.scheduleEnabled ? tab.startDays || 0 : 0,
@@ -1632,8 +1632,8 @@ const batchPublish = async () => {
         await confirmPublish(tab)
         publishResults.value.push({
           label: tab.label,
-          status: 'success',
-          message: '发布成功'
+          status: 'submitted',
+          message: '任务已提交，等待平台结果'
         })
       } catch (error) {
         publishResults.value.push({
@@ -1648,19 +1648,16 @@ const batchPublish = async () => {
     publishProgress.value = 100
     
     // 统计发布结果
-    const successCount = publishResults.value.filter(r => r.status === 'success').length
+    const submittedCount = publishResults.value.filter(r => r.status === 'submitted').length
     const failCount = publishResults.value.filter(r => r.status === 'error').length
     const cancelCount = publishResults.value.filter(r => r.status === 'cancelled').length
     
     if (isCancelled.value) {
-      ElMessage.warning(`发布已取消：${successCount}个成功，${failCount}个失败，${cancelCount}个未执行`)
+      ElMessage.warning(`提交已取消：${submittedCount}个已受理，${failCount}个失败，${cancelCount}个未执行`)
     } else if (failCount > 0) {
-      ElMessage.error(`发布完成：${successCount}个成功，${failCount}个失败`)
+      ElMessage.error(`提交完成：${submittedCount}个已受理，${failCount}个失败`)
     } else {
-      ElMessage.success('所有Tab发布成功')
-      setTimeout(() => {
-        batchPublishDialogVisible.value = false
-      }, 1000)
+      ElMessage.info('所有任务已提交，请核对平台结果或后端日志')
     }
     
   } catch (error) {

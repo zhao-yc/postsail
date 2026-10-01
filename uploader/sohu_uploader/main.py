@@ -198,8 +198,12 @@ class SoHuArticle(object):
         cover_paths=None,
         info_source=None,
     ):
-        self.title = (title or "").strip()[:72]
-        if len(self.title) < 5:
+        # 原定时填写无法确认成功，文章入口先禁止非零时间避免意外立即发布。
+        if publish_date != 0:
+            raise ValueError("搜狐号文章暂不支持定时发布，请选择立即发布")
+        # 拒绝超限标题，历史直接调用也不能静默截断原稿。
+        self.title = (title or "").strip()
+        if not 5 <= len(self.title) <= 72:
             raise ValueError("搜狐号文章标题需 5-72 个字")
         self.body = body or ""
         self.tags = tags or []

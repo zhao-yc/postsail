@@ -1,5 +1,7 @@
 # 安装说明
 
+项目名称为 **PostSail 播舟**，公开仓库为 [zhao-yc/postsail](https://github.com/zhao-yc/postsail)。CLI 入口 `sau`、Python 分发包名 `social-auto-upload`、`OMNIPOST_*` 配置项和源码目录名称继续兼容既有使用方式。
+
 这个文档分成两部分：
 
 - `For Humans`：给正常使用仓库的开发者、创作者、CLI 用户看
@@ -14,8 +16,8 @@
 ### 1. 克隆项目
 
 ```bash
-git clone https://github.com/dreammis/social-auto-upload.git
-cd social-auto-upload
+git clone https://github.com/zhao-yc/postsail.git
+cd postsail
 ```
 
 ### 2. 创建虚拟环境
@@ -46,6 +48,14 @@ uv pip install -e .
 
 安装完成后，会注册 `sau` 命令。
 
+需要运行 Web 后端或本机文章发布服务时，安装 Web 可选依赖（包含 Flask、Playwright）：
+
+```bash
+uv pip install -e ".[web]"
+```
+
+只在调用端使用 `sau article` 访问另一个已运行的服务时，基础安装即可，无需 Flask。
+
 ### 4. 安装 patchright Chromium
 
 当前主线使用 `patchright` 驱动浏览器。
@@ -64,6 +74,14 @@ Linux / macOS：
 PLAYWRIGHT_DOWNLOAD_HOST="https://npmmirror.com/mirrors/playwright" patchright install chromium
 ```
 
+百家号、知乎、今日头条、搜狐号的文章适配器使用 Playwright，按显式 `LOCAL_CHROME_PATH` → 系统 Chrome → 已安装 Playwright Chromium 选择浏览器。显式路径无效会提示修正；只有未配置路径且系统 Chrome 未安装时才回退 Chromium。需要 Chromium 回退时，在运行后端的机器执行：
+
+```bash
+python -m playwright install chromium
+```
+
+文章的 Playwright Chromium 与视频的 Patchright Chromium 分别安装。Linux 上若浏览器提示系统库缺失，请按 Playwright 的报错安装对应系统依赖；不要把某台维护者电脑的浏览器路径写进公共配置。
+
 ### 5. 配置 conf.py
 
 复制一份配置：
@@ -79,6 +97,10 @@ Windows 也可以直接手动复制并重命名。
 - `LOCAL_CHROME_PATH`
 - `LOCAL_CHROME_HEADLESS`
 - `DEBUG_MODE`
+- `ARTICLE_BROWSER_HEADLESS`：文章浏览器是否隐藏
+- `ARTICLE_RENDER_FONT`：表格、代码截图字体，部署环境需有对应中文字体
+- `ARTICLE_PREVIEW_SECONDS`：文章预览截图后保留浏览器秒数，默认 0
+- `ARTICLE_WORKER_ENABLED`：是否启用后端内置的串行文章执行器
 
 `XHS_SERVER` 目前只和小红书旧流程相关。
 
@@ -90,6 +112,7 @@ sau douyin --help
 sau kuaishou --help
 sau xiaohongshu --help
 sau bilibili --help
+sau article --help
 ```
 
 如果命令找不到，优先确认：
@@ -147,6 +170,34 @@ sau bilibili upload-video --account <account_name> --file videos/demo.mp4 --titl
 - 示例：
   - `https://gh-proxy.org/https://github.com/biliup/biliup/releases/download/v1.1.29/biliupR-v1.1.29-aarch64-linux.tar.xz`
 
+### 11. 独立文章与网页管理
+
+后端使用现有 SQLite 数据库，文章结构通过增量建表添加，不要删除或重建已有数据库。新安装按[README 的配置与数据库步骤](../README.md#3-配置与数据库)初始化。
+
+```bash
+uv pip install -e ".[web]"
+python sau_backend.py
+```
+
+前端在另一个终端启动：
+
+```bash
+cd sau_frontend
+npm install
+npm run dev
+```
+
+网页打开「账号管理」登录平台，再进入「文章管理」（路由 `/articles`，默认 `http://localhost:5173/#/articles`）编辑原稿、上传图片、选择平台并查询各账号任务。编辑器里的[本地开发入口](./local-development.md)默认使用 5175 端口，实际地址以启动日志为准。
+
+```bash
+sau article accounts --json
+sau article import --file ./draft/article.md --title "示例教程" --cover ./draft/cover.png --json
+sau article publish ARTICLE_ID --targets ./targets.json --preview --idempotency-key draft-preview-01 --json
+sau article status BATCH_ID --wait --json
+```
+
+服务地址通过 `--server` 或 `OMNIPOST_API_URL` 配置。百家号、知乎、今日头条、搜狐号文章默认立即发布、预览可选，定时请求明确不支持。四个平台的真实账号预览和正式发布尚未验收。完整 API、CLI、目标文件及备份迁移见[独立多平台文章发布](./articles.md)。
+
 ## For AI Agents
 
 如果你是一个可执行命令的 agent，请优先按下面顺序处理：
@@ -158,6 +209,8 @@ sau bilibili upload-video --account <account_name> --file videos/demo.mp4 --titl
 ```bash
 uv pip install -e .
 ```
+
+运行文章后端或网页服务时改用 `uv pip install -e ".[web]"`；只调用远程文章服务则保持基础安装。
 
 4. 如需浏览器驱动，优先使用：
 
@@ -181,6 +234,7 @@ sau douyin --help
 sau kuaishou --help
 sau xiaohongshu --help
 sau bilibili --help
+sau article --help
 ```
 
 6. 如果用户的目标是抖音或快手的登录、cookie 校验、视频上传、图文上传，优先走 CLI：
@@ -228,4 +282,5 @@ sau bilibili upload-video
 - `uploader/` 是核心实现目录
 - `sau_cli.py` 是当前 CLI 主入口
 - `docs/legacy-web.md` 是历史 Web 版本说明，不保证当前可用
+- 当前文章管理 `/articles` 和 `/api/articles` 是独立维护的入口，见 `docs/articles.md`；`docs/legacy-web.md` 区分这些入口与历史封装
 - Bilibili 首次运行时可能自动下载 `biliup`

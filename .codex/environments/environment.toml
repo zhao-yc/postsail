@@ -1,0 +1,41 @@
+version = 1
+name = "PostSail 播舟"
+
+[setup]
+script = ""
+
+# 动态获取项目绝对路径，避免将维护者的个人目录写进公开配置。
+[[actions]]
+name = "启动全部"
+icon = "run"
+command = 'bash "$(git rev-parse --show-toplevel)/.codex/scripts/dev.sh" start all'
+
+[[actions]]
+name = "启动后端"
+icon = "run"
+command = 'bash "$(git rev-parse --show-toplevel)/.codex/scripts/dev.sh" start backend'
+
+[[actions]]
+name = "运行前端"
+icon = "run"
+command = 'bash "$(git rev-parse --show-toplevel)/.codex/scripts/dev.sh" start frontend'
+
+[[actions]]
+name = "停止全部"
+icon = "tool"
+command = 'bash "$(git rev-parse --show-toplevel)/.codex/scripts/dev.sh" stop all'
+
+[[actions]]
+name = "查看状态"
+icon = "debug"
+command = 'bash "$(git rev-parse --show-toplevel)/.codex/scripts/dev.sh" status all'
+
+[[actions]]
+name = "后端日志"
+icon = "debug"
+command = 'bash "$(git rev-parse --show-toplevel)/.codex/scripts/dev.sh" logs backend'
+
+[[actions]]
+name = "前端日志"
+icon = "debug"
+command = 'bash "$(git rev-parse --show-toplevel)/.codex/scripts/dev.sh" logs frontend'

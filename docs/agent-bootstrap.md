@@ -2,7 +2,7 @@
 
 这份文档是写给 `OpenClaw`、`Codex`、`Claude Code / cc` 这类 agent 客户端用户的。
 
-目标不是让 agent 先通读整个仓库，而是先把 `social-auto-upload` 安装到可运行、可验证、可继续执行任务的状态。
+目标不是让 agent 先通读整个仓库，而是先把 PostSail（播舟）安装到可运行、可验证、可继续执行任务的状态。
 
 当前主线已接入的平台：
 
@@ -34,7 +34,7 @@
 复制下面整段，发给你的 agent：
 
 ```text
-你现在在一个名为 `social-auto-upload` 的仓库中工作。
+你现在在 PostSail（播舟）的仓库中工作。项目沿用上游 `sau` CLI、`social-auto-upload` Python 分发包名与源码目录名称，以兼容既有安装和脚本。
 
 这是一个多平台社交媒体自动发布项目。当前主线已经接入：
 
@@ -54,12 +54,13 @@
    - `docs/install.md`
    - `docs/CLI.md`
    - `docs/update.md`
+   - `docs/articles.md`（百家号、知乎、头条、搜狐长文章）
 5. 如果需要平台级操作，优先参考这些 skill：
    - `skills/douyin-upload/`
    - `skills/kuaishou-upload/`
    - `skills/xiaohongshu-upload/`
    - `skills/bilibili-upload/`
-6. 不要默认走历史 `examples/` 和旧 Web 路径，除非当前 CLI 主线不可用。
+6. 视频和图片笔记优先使用各平台 CLI；百家号、知乎、头条、搜狐长文章使用 `sau article` 和当前文章 API，网页管理入口为 `/articles`。旧 `examples/` 仅作单平台排障参考。
 7. 如果登录流程生成二维码图片，不要只返回图片路径；请直接展示图片，或者明确告诉我该打开哪个本地图片文件扫码。
 8. 如果是 Bilibili 登录，不要在非交互环境里强行代跑；应改为指导我在本地真实终端执行。
 9. 安装完成后，请优先验证以下命令：
@@ -68,6 +69,7 @@
    - `sau kuaishou --help`
    - `sau xiaohongshu --help`
    - `sau bilibili --help`
+   - `sau article --help`
 10. 完成后，请明确输出：
    - 你实际执行了哪些命令
    - 哪些验证通过了

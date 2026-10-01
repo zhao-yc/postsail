@@ -4,8 +4,8 @@
       <el-aside :width="isCollapse ? '64px' : '200px'">
         <div class="sidebar">
           <div class="logo">
-            <img v-show="isCollapse" src="/vite.svg" alt="Logo" class="logo-img">
-            <h2 v-show="!isCollapse">自媒体自动化运营系统</h2>
+            <img v-show="isCollapse" src="/postsail.svg" alt="PostSail 播舟" class="logo-img">
+            <h2 v-show="!isCollapse">PostSail · 播舟</h2>
           </div>
           <el-menu
             :router="true"
@@ -32,9 +32,17 @@
               <el-icon><Upload /></el-icon>
               <span>发布中心</span>
             </el-menu-item>
+            <el-menu-item index="/articles">
+              <el-icon><Document /></el-icon>
+              <span>文章工作台</span>
+            </el-menu-item>
             <el-menu-item index="/data-center">
               <el-icon><DataLine /></el-icon>
               <span>数据中心</span>
+            </el-menu-item>
+            <el-menu-item index="/messages">
+              <el-icon><ChatDotRound /></el-icon>
+              <span>消息中心</span>
             </el-menu-item>
             <el-menu-item index="/about">
               <el-icon><InfoFilled /></el-icon>
@@ -47,7 +55,7 @@
         <el-header>
           <div class="header-content">
             <div class="header-left">
-              <el-icon class="toggle-sidebar" @click="toggleSidebar"><Fold /></el-icon>
+              <button class="toggle-sidebar" type="button" aria-label="切换侧边栏" @click="toggleSidebar"><el-icon><Fold /></el-icon></button>
             </div>
             <div class="header-right">
               <!-- 账号信息已移除 -->
@@ -63,11 +71,11 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   HomeFilled, User, DataLine, InfoFilled,
-  Fold, Picture, Upload
+  Fold, Picture, Upload, Document, ChatDotRound
 } from '@element-plus/icons-vue'
 
 const route = useRoute()
@@ -78,7 +86,13 @@ const activeMenu = computed(() => {
 })
 
 // 侧边栏折叠状态
-const isCollapse = ref(false)
+const mobileQuery = window.matchMedia('(max-width: 750px)')
+const isCollapse = ref(mobileQuery.matches)
+
+// 窗口跨过移动断点时调整导航，保证工作台具有足够的阅读宽度。
+const syncViewport = (event) => { isCollapse.value = event.matches }
+onMounted(() => mobileQuery.addEventListener('change', syncViewport))
+onBeforeUnmount(() => mobileQuery.removeEventListener('change', syncViewport))
 
 // 切换侧边栏折叠状态
 const toggleSidebar = () => {
@@ -95,6 +109,7 @@ const toggleSidebar = () => {
 
 .el-container {
   height: 100vh;
+  min-width: 0;
 }
 
 .el-aside {
@@ -120,7 +135,6 @@ const toggleSidebar = () => {
       .logo-img {
         width: 32px;
         height: 32px;
-        margin-right: 12px;
       }
       
       h2 {
@@ -164,6 +178,10 @@ const toggleSidebar = () => {
     
     .header-left {
       .toggle-sidebar {
+        border: 0;
+        background: transparent;
+        display: flex;
+        padding: 8px;
         font-size: 20px;
         cursor: pointer;
         color: $text-regular;
@@ -195,8 +213,13 @@ const toggleSidebar = () => {
 }
 
 .el-main {
+  min-width: 0;
   background-color: $bg-color-page;
   padding: 20px;
   overflow-y: auto;
+}
+
+@media (max-width: 750px) {
+  .el-main { padding: 12px; }
 }
 </style>

@@ -1,5 +1,5 @@
 {
-  "name": "sau-admin",
+  "name": "postsail-admin",
   "private": true,
   "version": "0.0.0",
   "author": "rehat",
@@ -11,6 +11,11 @@
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.1",
+    "@tiptap/extension-image": "3.31.3",
+    "@tiptap/extension-table": "3.31.3",
+    "@tiptap/pm": "3.31.3",
+    "@tiptap/starter-kit": "3.31.3",
+    "@tiptap/vue-3": "3.31.3",
     "axios": "^1.9.0",
     "element-plus": "^2.9.11",
     "pinia": "^3.0.2",

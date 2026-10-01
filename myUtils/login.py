@@ -9,26 +9,12 @@ import uuid
 from pathlib import Path
 from conf import BASE_DIR, LOCAL_CHROME_HEADLESS, LOCAL_CHROME_PATH
 from uploader.bilibili_uploader.runtime import run_biliup_command
+from utils.browser_options import get_browser_options as build_browser_options
 
 # 统一获取浏览器启动配置（防风控+引入本地浏览器）
 def get_browser_options():
-    options = {
-        'headless': LOCAL_CHROME_HEADLESS,
-        'args': [
-            '--disable-blink-features=AutomationControlled',  # 核心防爬屏蔽：去掉 window.navigator.webdriver 标签
-            '--lang=zh-CN',
-            '--disable-infobars',
-            '--start-maximized'
-        ]
-    }
-    # 如果用户在 conf.py 里配置了本地 Chrome，就用本地的，这样成功率极高
-    if LOCAL_CHROME_PATH:
-        options['executable_path'] = LOCAL_CHROME_PATH
-    else:
-        # 未配置路径时使用系统已安装的 Chrome，避免 Playwright Chromium 未安装导致启动失败
-        options['channel'] = 'chrome'
-
-    return options
+    """登录与账号校验共用浏览器配置，保持本地 Chrome 路径一致。"""
+    return build_browser_options(LOCAL_CHROME_HEADLESS, LOCAL_CHROME_PATH)
 
 # 等待二维码图片的 src 就绪（页面渲染慢时立即读取会拿到空值，导致前端一直停留在"请求中"）
 async def wait_for_qr_src(locator, timeout_s: int = 60):

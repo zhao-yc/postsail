@@ -20,7 +20,8 @@ request.interceptors.request.use(
     return config
   },
   (error) => {
-    console.error('请求错误:', error)
+    // 请求对象可能含机器人密钥或授权头，控制台仅记录错误类型。
+    console.error('请求准备失败:', error.code || '未知错误')
     return Promise.reject(error)
   }
 )
@@ -39,7 +40,8 @@ request.interceptors.response.use(
     }
   },
   (error) => {
-    console.error('响应错误:', error)
+    // 禁止输出 Axios 请求配置，避免把 Cookie、机器人地址和密钥留在日志中。
+    console.error('请求失败:', { status: error.response?.status, code: error.code })
     
     // 处理HTTP错误状态码
     if (error.response) {

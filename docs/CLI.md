@@ -6,10 +6,12 @@
 - `kuaishou`
 - `xiaohongshu`
 - `bilibili`
+- `tencent`
+- `article`：百家号、知乎、今日头条、搜狐号独立文章 API 客户端
 
 实现说明：
 
-- `sau_cli.py` 是当前 CLI 的主入口和唯一主要实现文件
+- `sau_cli.py` 是当前 CLI 主入口；文章客户端实现位于 `utils/articles/cli.py`
 - `sau.exe` 是安装后在 Windows 虚拟环境里自动生成的命令入口，本质上还是调用 `sau_cli.py`
 - 如果需要给 OpenClaw、Codex 等 agent 使用，可参考仓库内 skill：
   - `skills/douyin-upload/`
@@ -32,6 +34,7 @@ sau douyin --help
 sau kuaishou --help
 sau xiaohongshu --help
 sau bilibili --help
+sau article --help
 ```
 
 ## 安装 patchright 浏览器
@@ -41,6 +44,28 @@ Windows 下推荐先指定镜像，再安装 Chromium：
 ```powershell
 $env:PLAYWRIGHT_DOWNLOAD_HOST="https://npmmirror.com/mirrors/playwright"; patchright install chromium
 ```
+
+文章 CLI 只访问服务 API，调用端无需本地浏览器。文章后端安装 `uv pip install -e ".[web]"`，按显式 `LOCAL_CHROME_PATH`、系统 Chrome、已安装 Playwright Chromium 选择浏览器；需要回退时在后端机器运行 `python -m playwright install chromium`。详见[文章安装与服务配置](./articles.md#安装与服务配置)。
+
+## 独立文章 CLI
+
+先在网页「账号管理」登录文章平台，网页「文章管理」（`/articles`）和 CLI 共用原稿与任务记录：
+
+```bash
+sau article accounts --json
+sau article import --file ./draft/article.md --title "示例教程" --cover ./draft/cover.png --json
+sau article update ARTICLE_ID --revision 1 --file ./draft/article.md --json
+sau article publish ARTICLE_ID --targets ./targets.json --preview --idempotency-key draft-preview-01 --json
+sau article publish ARTICLE_ID --targets ./targets.json --idempotency-key draft-publish-01 --json
+sau article status BATCH_ID --wait --timeout 300 --json
+sau article retry TASK_ID --json
+```
+
+`ARTICLE_ID`、`BATCH_ID`、`TASK_ID` 是服务返回的字符串 ID；账号使用网页账号正整数 ID。`targets.json` 指定 `baijiahao/zhihu/toutiao/sohu` 平台和账号，支持标题、封面、话题、声明覆盖。正文支持 Markdown、HTML、纯文本，本地图片先上传；官网流程独立。
+
+默认正式立即发布，`--preview` 可选。四平台文章首版不支持定时请求，不能使用视频命令的 `--schedule`。`queued` 只表示任务受理，`submitted` 表示平台已接收、可能审核中，`published` 才表示取得已发表依据；`unknown` 必须人工核查后再决定重试。各平台真实账号尚未验收，不能把离线测试通过当作发布成功。
+
+服务通过 `--server` 或 `OMNIPOST_API_URL` 配置，默认 `http://127.0.0.1:5409`。完整目标文件、修订检查、幂等键、结果核查和 API 说明见[独立多平台文章发布](./articles.md)。
 
 ## 抖音 CLI 子命令
 
@@ -101,6 +126,8 @@ sau bilibili upload-video --account <account_name> --file videos/demo.mp4 --titl
 ## 定时发布
 
 抖音、快手、小红书的图文和视频上传，以及 Bilibili 的视频上传都支持 `--schedule`。只要传了 `--schedule`，CLI 就会自动切换到对应平台的定时发布策略；不传则默认立即发布。
+
+该规则不适用于 `sau article`：百家号、知乎、今日头条、搜狐号的文章首版仅支持立即发布，API 收到定时请求会明确拒绝。
 
 ```bash
 sau douyin upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --schedule "2026-03-24 21:30"

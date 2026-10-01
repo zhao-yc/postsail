@@ -1,4 +1,4 @@
-"""Build a clean open-source source archive (no secrets / local runtime data)."""
+"""构建干净的 PostSail 开源源码包，排除凭据与本地运行数据。"""
 from __future__ import annotations
 
 import re
@@ -8,8 +8,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 STAMP = date.today().strftime("%Y%m%d")
-ARCHIVE_NAME = f"social-auto-upload-opensource-{STAMP}.zip"
-PREFIX = f"social-auto-upload-{STAMP}"
+# 源码包使用独立品牌名称，运行目录和兼容接口继续沿用。
+ARCHIVE_NAME = f"postsail-opensource-{STAMP}.zip"
+PREFIX = f"postsail-{STAMP}"
 
 # Top-level / path prefixes to skip entirely
 SKIP_DIR_NAMES = {
@@ -31,6 +32,7 @@ SKIP_DIR_NAMES = {
     "cookiesFile",
     "uploadFile",
     "videoFile",
+    "articleData",
     "logs",
     "dist",
     "build",
@@ -42,9 +44,9 @@ SKIP_DIR_NAMES = {
 
 SKIP_FILE_NAMES = {
     "conf.py",
+    "accounts.ini",
     "database.db",
     "qrcode.png",
-    "package-lock.json",
     ".DS_Store",
     "Thumbs.db",
     ".env",
@@ -57,6 +59,10 @@ SKIP_SUFFIXES = {
     ".db",
     ".sqlite",
     ".sqlite3",
+    ".pem",
+    ".key",
+    ".p12",
+    ".pfx",
     ".zip",
     ".7z",
     ".rar",
@@ -78,6 +84,7 @@ SKIP_PATH_REGEX = re.compile(
     r"cookiesFile([/\\]|$)|"
     r"uploadFile([/\\]|$)|"
     r"videoFile([/\\]|$)|"
+    r"articleData([/\\]|$)|"
     r"logs([/\\]|$)|"
     r"\.worktrees([/\\]|$)|"
     r"\.uv-cache([/\\]|$)|"
@@ -112,6 +119,11 @@ def should_skip(path: Path) -> bool:
     if any(part.endswith(".egg-info") for part in parts):
         return True
     if path.name in SKIP_FILE_NAMES:
+        return True
+    # 公开环境配置只保留明确命名的空白示例。
+    if path.name.startswith(".env.") and path.name not in {".env.example", ".env.sample"}:
+        return True
+    if re.search(r"\.(?:db|sqlite|sqlite3)(?:[-.]|$)", path.name, re.I):
         return True
     if path.suffix.lower() in SKIP_SUFFIXES:
         return True
@@ -180,6 +192,7 @@ def main() -> None:
                     "/conf.py",
                     "/cookies/",
                     "/cookiesfile/",
+                    "/articledata/",
                     "/database.db",
                     "/.venv/",
                     "/node_modules/",

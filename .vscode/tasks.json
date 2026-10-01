@@ -1,0 +1,57 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "PostSail：启动全部",
+      "type": "process",
+      "command": "bash",
+      "args": ["${workspaceFolder}/.codex/scripts/dev.sh", "start", "all"],
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "PostSail：启动后端",
+      "type": "process",
+      "command": "bash",
+      "args": ["${workspaceFolder}/.codex/scripts/dev.sh", "start", "backend"],
+      "problemMatcher": []
+    },
+    {
+      "label": "PostSail：运行前端",
+      "type": "process",
+      "command": "bash",
+      "args": ["${workspaceFolder}/.codex/scripts/dev.sh", "start", "frontend"],
+      "problemMatcher": []
+    },
+    {
+      "label": "PostSail：停止全部",
+      "type": "process",
+      "command": "bash",
+      "args": ["${workspaceFolder}/.codex/scripts/dev.sh", "stop", "all"],
+      "problemMatcher": []
+    },
+    {
+      "label": "PostSail：查看状态",
+      "type": "process",
+      "command": "bash",
+      "args": ["${workspaceFolder}/.codex/scripts/dev.sh", "status", "all"],
+      "problemMatcher": []
+    },
+    {
+      "label": "PostSail：后端日志",
+      "type": "process",
+      "command": "bash",
+      "args": ["${workspaceFolder}/.codex/scripts/dev.sh", "logs", "backend"],
+      "problemMatcher": []
+    },
+    {
+      "label": "PostSail：前端日志",
+      "type": "process",
+      "command": "bash",
+      "args": ["${workspaceFolder}/.codex/scripts/dev.sh", "logs", "frontend"],
+      "problemMatcher": []
+    }
+  ],
+  "options": { "cwd": "${workspaceFolder}" },
+  "presentation": { "reveal": "always", "panel": "dedicated", "clear": false }
+}

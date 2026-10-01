@@ -45,6 +45,14 @@ class _FakePage:
     async def goto(self, url, **kwargs):
         self.url = url
 
+    async def wait_for_url(self, url, **kwargs):
+        """模拟扫码后进入创作者平台页，覆盖已有的会话落定等待。"""
+        self.url = "https://channels.weixin.qq.com/platform/post/create"
+
+    async def wait_for_timeout(self, timeout):
+        """测试中跳过真实等待。"""
+        pass
+
     def on(self, event, callback):
         self.url += "?logged-in"
         callback(self.main_frame)

@@ -21,8 +21,13 @@ export default defineConfig({
     port: 5173,
     open: true,
     proxy: {
+      // 工作台接口保留 /api 前缀，旧接口继续沿用下方的去前缀规则。
+      '^/api/(articles(?:/|$)|article-|interactions(?:/|$)|analytics(?:/|$))': {
+        target: process.env.OMNIPOST_BACKEND_URL || 'http://localhost:5409',
+        changeOrigin: true,
+      },
       '/api': {
-        target: 'http://localhost:5409',
+        target: process.env.OMNIPOST_BACKEND_URL || 'http://localhost:5409',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, '')
       }
