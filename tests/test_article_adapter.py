@@ -747,5 +747,20 @@ class ArticleLocalBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await read_result_evidence(self.page, 'zhihu', '验证码教程'))['status'], 'published')
 
 
+    async def test_wechat_cursor_separator_is_not_a_body_image(self):
+        """只排除已核实的公众号编辑器占位图，额外原图仍会阻止提交。"""
+        editor = self.page.locator("#editor")
+        await editor.evaluate("el=>el.innerHTML='<p>正文<img class=ProseMirror-separator></p>'")
+        document = PreparedDocument("<p>正文</p>", "<p>正文</p>", "正文", [], [], [])
+        await _verify_final_body(editor, document, "wechat")
+        self.assertEqual(await body_sequence(editor, "wechat"), "正文")
+        with self.assertRaisesRegex(PreparationError, "正文图片"):
+            await _verify_final_body(editor, document, "zhihu")
+        await editor.evaluate("el=>el.insertAdjacentHTML('beforeend','<img src=https://fixture.test/uploaded.png>')")
+        with self.assertRaisesRegex(PreparationError, "正文图片"):
+            await _verify_final_body(editor, document, "wechat")
+
+
+
 if __name__ == "__main__":
     unittest.main()

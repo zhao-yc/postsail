@@ -1,5 +1,6 @@
 """网页、API、CLI 共用的文章平台定义；不依赖浏览器或 Web 运行时。"""
 from .extended_platforms import EXTENDED_PLATFORMS, EXTENDED_CONTENT_KINDS, EXTENDED_OPTION_FIELDS
+from .note_platforms import NOTE_PLATFORMS, NOTE_PLATFORM_RULES
 
 PLATFORMS = {
     "baijiahao": {"label": "百家号", "account_type": 5, "title_min": 2, "title_max": 64,
@@ -55,6 +56,7 @@ OPTION_FIELDS = {
 }
 for name, rules in PLATFORMS.items():
     rules["content_kind"] = CONTENT_KINDS.get(name, "文章")
+    rules["content_mode"] = "rich_article"
     if name in EXTENDED_OPTION_FIELDS:
         rules["option_fields"] = [dict(field) for field in EXTENDED_OPTION_FIELDS[name]]
         continue
@@ -69,8 +71,10 @@ for name, rules in PLATFORMS.items():
                        "placeholder": "按平台原文填写；不填写则保留平台默认值"})
     rules["option_fields"] = fields
 
+PLATFORMS.update(NOTE_PLATFORM_RULES)
+
 # 列表顺序和用户选择器一致；既有 API 标识及账号类型保持兼容。
 PLATFORMS = {name: PLATFORMS[name] for name in (
     "douyin", "bilibili", "baijiahao", "toutiao", "weibo", "zhihu", "qiehao", "sohu",
-    *EXTENDED_PLATFORMS)}
+    *EXTENDED_PLATFORMS, *NOTE_PLATFORM_RULES)}
 ARTICLE_PLATFORMS = tuple(PLATFORMS)

@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from utils.articles.browser import PreparationError, PreparedDocument, launch_article_browser
 from utils.articles.dongchedi import DongchediArticleAdapter, _publish_request, _submission_id
@@ -110,6 +110,40 @@ class DongchediProtocolTests(unittest.TestCase):
 
 
 class DongchediPreparationOrderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_preview_submit_has_no_browser_or_callback_side_effects(self):
+        value = adapter("preview")
+        value._document = object()
+        page, callback = MagicMock(), MagicMock()
+        with self.assertRaisesRegex(PreparationError, "预览模式"):
+            await value.submit(page, callback)
+        callback.assert_not_called()
+        self.assertEqual(page.mock_calls, [])
+
+    async def test_click_exception_is_never_retried(self):
+        value = adapter()
+        value._document = object()
+        value._validate_destination = MagicMock()
+        value._has_challenge = AsyncMock(return_value=False)
+        value.verify_title = AsyncMock()
+        value.verify_options = AsyncMock()
+        value.verify_body = AsyncMock()
+        button = MagicMock()
+        button.scroll_into_view_if_needed = AsyncMock()
+        button.click = AsyncMock(side_effect=RuntimeError("点击后页面关闭"))
+        callback = MagicMock()
+        with patch('utils.articles.dongchedi._unique', new=AsyncMock(return_value=button)):
+            with self.assertRaisesRegex(RuntimeError, "页面关闭"):
+                await value.submit(MagicMock(), callback)
+            with self.assertRaisesRegex(PreparationError, "已经尝试"):
+                await value.submit(MagicMock(), callback)
+        callback.assert_called_once()
+        button.click.assert_awaited_once()
+
+    async def test_no_receipt_is_accepted_before_boundary(self):
+        page = MagicMock()
+        self.assertEqual((await adapter().read_result(page))["status"], "unknown")
+        self.assertEqual(page.mock_calls, [])
+
     async def test_selected_covers_are_uploaded_before_body_then_only_verified(self):
         value = DongchediArticleAdapter({"title": TITLE}, Path("cover.png"))
         uploaded = []
@@ -249,6 +283,68 @@ class DongchediBrowserBoundaryTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(PreparationError, "旧稿"):
             await value.open_editor(self.page)
         self.assertEqual(await self.page.locator(value.title_selector).input_value(), "")
+
+    async def test_exact_native_title_limit_and_duplicate_controls_stop_without_filling(self):
+        value = adapter()
+        await self.page.goto(value.editor_url)
+        title = self.page.locator(value.title_selector)
+        await title.evaluate("el=>el.maxLength=3")
+        with self.assertRaisesRegex(PreparationError, "最多 3 字"):
+            await value.fill_title(self.page)
+        self.assertEqual(await title.input_value(), "")
+        await title.evaluate("el=>{el.removeAttribute('maxlength');el.after(el.cloneNode(true));}")
+        with self.assertRaisesRegex(PreparationError, "唯一"):
+            await value.fill_title(self.page)
+        self.assertEqual(await self.page.locator(value.title_selector).evaluate_all('els=>els.map(el=>el.value)'), ['', ''])
+
+    async def test_challenge_before_submit_prevents_boundary_and_click(self):
+        value = adapter()
+        value._document = object()
+        await self.page.goto(value.editor_url)
+        await self.page.locator('#publish').evaluate('el=>el.onclick=()=>window.clicked=true')
+        await self.page.evaluate("document.body.insertAdjacentHTML('beforeend','<div role=dialog>请完成安全验证</div>')")
+        callback = MagicMock()
+        with self.assertRaisesRegex(PreparationError, "安全验证"):
+            await value.submit(self.page, callback)
+        callback.assert_not_called()
+        self.assertFalse(await self.page.evaluate('!!window.clicked'))
+
+    async def test_challenge_after_entry_stops_confirmation_and_keeps_unknown(self):
+        value = adapter()
+        value._document = object()
+        value.verify_title = AsyncMock()
+        value.verify_options = AsyncMock()
+        value.verify_body = AsyncMock()
+        await self.page.goto(value.editor_url)
+        await self.page.locator('#publish').evaluate('''el=>el.onclick=()=>{
+          window.clicks=(window.clicks||0)+1;
+          document.body.insertAdjacentHTML('beforeend','<div role="dialog" class="arco-modal"><div class="arco-modal-title">安全验证</div>请完成安全验证<button onclick="window.confirmed=true">确定</button></div>');
+        }''')
+        callback = MagicMock()
+        await value.submit(self.page, callback)
+        callback.assert_called_once()
+        self.assertEqual(await self.page.evaluate('window.clicks'), 1)
+        self.assertFalse(await self.page.evaluate('!!window.confirmed'))
+        result = await value.read_result(self.page)
+        self.assertEqual(result['status'], 'unknown')
+        self.assertIn('人工安全验证', result['message'])
+
+    async def test_article_text_and_hidden_challenge_are_not_verification_prompts(self):
+        await self.page.goto(adapter().editor_url)
+        await self.page.locator(adapter().editor_selector).fill('本文讲解安全验证与验证码')
+        await self.page.evaluate("document.body.insertAdjacentHTML('beforeend','<div role=dialog style=display:none>请完成安全验证</div>')")
+        self.assertFalse(await adapter()._has_challenge(self.page))
+
+    async def test_draft_toast_or_foreign_page_cannot_create_a_receipt(self):
+        value = adapter()
+        await self.page.goto(value.editor_url)
+        await value._mark_submit(lambda: None)
+        await self.page.locator(value.editor_selector).fill('发布成功')
+        await self.page.evaluate("document.body.insertAdjacentHTML('beforeend','<div role=alert>草稿保存成功</div>')")
+        self.assertEqual((await value.read_result(self.page))['status'], 'unknown')
+        await self.page.goto('https://mp.dcdapp.com.attacker.example/result')
+        await self.page.evaluate("document.body.insertAdjacentHTML('beforeend','<div role=alert>发布成功</div>')")
+        self.assertEqual((await value.read_result(self.page))['status'], 'unknown')
 
     async def test_serialized_body_must_preserve_text_format_images_and_order(self):
         value = adapter()

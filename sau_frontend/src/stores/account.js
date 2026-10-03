@@ -26,7 +26,11 @@ export const PLATFORM_TYPES = {
   21: '简书',
   22: '车家号',
   23: '易车号',
-  24: '懂车号'
+  24: '懂车号',
+  25: '微信公众号',
+  26: '京东图文',
+  27: '小红书商家号',
+  28: '淘宝光合'
 }
 
 export const ACCOUNT_UNAVAILABLE_REASONS = {}
@@ -35,23 +39,26 @@ export const useAccountStore = defineStore('account', () => {
   // 存储所有账号信息
   const accounts = ref([])
 
-  const normalizeAccount = (item) => ({
-    id: item[0],
-    type: item[1],
-    filePath: item[2],
-    name: item[3],
-    status: ACCOUNT_UNAVAILABLE_REASONS[item[1]] ? '待接入' : (item[4] === -1 ? '验证中' : (item[4] === 1 ? '正常' : '异常')),
-    platform: PLATFORM_TYPES[item[1]] || '未知'
-  })
+  const normalizeAccount = (item, identities = {}) => {
+    const identity = identities[String(item[0])] || { needs_confirmation: item[1] >= 12 && item[1] <= 16 }
+    return {
+      id: item[0], type: item[1], filePath: item[2], name: item[3],
+      status: identity.needs_confirmation ? '平台待确认' : (ACCOUNT_UNAVAILABLE_REASONS[item[1]] ? '待接入' : (item[4] === -1 ? '验证中' : (item[4] === 1 ? '正常' : '异常'))),
+      platform: identity.needs_confirmation ? `待确认（旧编号 ${item[1]}）` : (PLATFORM_TYPES[item[1]] || '未知'),
+      platformId: identity.platform, needsConfirmation: Boolean(identity.needs_confirmation),
+      platformCandidates: identity.candidates || [], platformSuggestion: identity.suggested_platform,
+      platformReason: identity.reason || '请确认旧账号实际所属平台'
+    }
+  }
 
   // 设置账号列表
-  const setAccounts = (accountsData) => {
-    accounts.value = accountsData.map(normalizeAccount)
+  const setAccounts = (accountsData, identities = {}) => {
+    accounts.value = accountsData.map(item => normalizeAccount(item, identities))
   }
 
   // 合并部分账号更新（按平台刷新时使用）
-  const mergeAccounts = (accountsData) => {
-    const updated = accountsData.map(normalizeAccount)
+  const mergeAccounts = (accountsData, identities = {}) => {
+    const updated = accountsData.map(item => normalizeAccount(item, identities))
     for (const acc of updated) {
       const index = accounts.value.findIndex(a => a.id === acc.id)
       if (index !== -1) {

@@ -17,6 +17,7 @@ from .model import (ArticleError, PLATFORMS, clean_content, image_references, va
                     validate_platform_content, validate_platform_cover, option_asset_ids,
                     validate_option_asset, validate_title_characters)
 from .store import ArticleStore, encode
+from utils.account_bindings import AccountBindingError, account_identity, require_account_platform
 
 BLOCK_DUPLICATES = {"queued", "running", "needs_action", "submitted", "published", "unknown"}
 
@@ -176,10 +177,16 @@ class ArticleService:
         with self.store.connect() as conn:
             if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='user_info'").fetchone():
                 return []
-            rows = conn.execute("SELECT id,type,userName,status FROM user_info ORDER BY id").fetchall()
-        names = {rules["account_type"]: platform for platform, rules in PLATFORMS.items()}
-        return [{"id": row["id"], "platform": names[row["type"]], "user_name": row["userName"], "status": row["status"]}
-                for row in rows if row["type"] in names]
+            rows = conn.execute("SELECT * FROM user_info ORDER BY id").fetchall()
+            result = []
+            for row in rows:
+                identity = account_identity(conn, row)
+                if identity["platform"] in PLATFORMS or identity["needs_confirmation"]:
+                    result.append({"id": row["id"], "platform": identity["platform"],
+                                   "user_name": row["userName"], "status": row["status"],
+                                   "needs_confirmation": identity["needs_confirmation"],
+                                   "reason": identity["reason"]})
+            return result
 
     def account_file(self, account_id, platform):
         """只能使用该平台登记的网页账号，并限定在项目 Cookie 目录内。"""
@@ -187,8 +194,10 @@ class ArticleService:
             if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='user_info'").fetchone():
                 raise ArticleError("请先在账号管理中添加并登录平台账号")
             row = conn.execute("SELECT * FROM user_info WHERE id=?", (account_id,)).fetchone()
-        if not row or row["type"] != PLATFORMS[platform]["account_type"]:
-            raise ArticleError("账号不存在或与所选平台不匹配")
+            try:
+                require_account_platform(conn, row, platform)
+            except AccountBindingError as exc:
+                raise ArticleError(str(exc)) from exc
         path = (self.cookie_dir / row["filePath"]).resolve()
         if not path.is_relative_to(self.cookie_dir.resolve()) or not path.is_file():
             raise ArticleError("账号会话文件不可用，请在账号管理中重新登录")
@@ -248,8 +257,21 @@ class ArticleService:
         if not isinstance(tags, list) or len(tags) > 20 or any(not isinstance(tag, str) or len(tag) > 100 for tag in tags):
             raise ArticleError("平台话题必须为文本数组，最多 20 个，每项不超过 100 字")
         validate_platform_content(platform, article["content_html"], tags)
-        return {"platform": platform, "title": title.strip(), "content_html": article["content_html"],
-                "cover_asset_id": cover, "tags": tags, "options": options, "mode": mode}
+        snapshot = {"platform": platform, "title": title.strip(), "content_html": article["content_html"],
+                    "cover_asset_id": cover, "tags": tags, "options": options, "mode": mode}
+        if rules.get("content_mode") == "image_text":
+            # 提交批次时就报告笔记格式/字数/相册问题，避免启动浏览器后才发现。
+            from .notes import prepare_note_document
+            from .browser import PreparationError
+            asset_ids = {image.get("data-asset-id") for image in image_references(snapshot["content_html"])}
+            if cover:
+                asset_ids.add(cover)
+            assets = {asset_id: self.assets.get(asset_id) for asset_id in asset_ids if asset_id}
+            try:
+                prepare_note_document(snapshot, assets)
+            except PreparationError as exc:
+                raise ArticleError(str(exc)) from exc
+        return snapshot
 
     def publish(self, article_id, data):
         """一个原稿修订形成一个批次，每个目标账号各自校验和执行。"""

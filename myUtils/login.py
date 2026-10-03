@@ -708,8 +708,10 @@ async def article_account_cookie_gen(id, status_queue, platform, account_type):
         if not await check_cookie(account_type, account_file.name):
             raise RuntimeError("登录会话校验未通过")
         with sqlite3.connect(Path(BASE_DIR / "db" / "database.db")) as conn:
-            conn.execute('INSERT INTO user_info (type,filePath,userName,status) VALUES (?,?,?,?)',
-                         (account_type, account_file.name, id, 1))
+            cursor = conn.execute('INSERT INTO user_info (type,filePath,userName,status) VALUES (?,?,?,?)',
+                                  (account_type, account_file.name, id, 1))
+            from utils.account_bindings import bind_account
+            bind_account(conn, cursor.lastrowid, platform)
         status_queue.put("200")
         return True
     except Exception:
@@ -727,6 +729,31 @@ async def weibo_cookie_gen(id, status_queue):
 async def qiehao_cookie_gen(id, status_queue):
     """企鹅号账号使用类型 11，与微信视频号的类型 2 分开保存。"""
     return await article_account_cookie_gen(id, status_queue, "qiehao", 11)
+
+
+async def wechat_cookie_gen(id, status_queue):
+    """微信公众号使用独立类型 25，不能复用视频号或企鹅号凭据。"""
+    return await article_account_cookie_gen(id, status_queue, "wechat", 25)
+
+
+async def jd_cookie_gen(id, status_queue):
+    """京东图文使用独立类型 26。"""
+    return await article_account_cookie_gen(id, status_queue, "jd", 26)
+
+
+async def xiaohongshu_merchant_cookie_gen(id, status_queue):
+    """小红书商家号使用独立类型 27，不能复用个人账号记录。"""
+    return await article_account_cookie_gen(id, status_queue, "xiaohongshu_merchant", 27)
+
+
+async def dongchedi_cookie_gen(id, status_queue):
+    """懂车号沿用文章类型 24。"""
+    return await article_account_cookie_gen(id, status_queue, "dongchedi", 24)
+
+
+async def taobao_cookie_gen(id, status_queue):
+    """淘宝光合创作者使用独立类型 28。"""
+    return await article_account_cookie_gen(id, status_queue, "taobao", 28)
 
 
 def launch_bilibili_login_terminal(biliup_path, account_file, system=None):

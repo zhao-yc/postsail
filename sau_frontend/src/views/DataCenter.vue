@@ -346,7 +346,7 @@ const syncMetaText = computed(() => {
 async function loadAccounts() {
   const res = await accountApi.getAccounts()
   if (res.code === 200) {
-    accountStore.setAccounts(res.data || [])
+    accountStore.setAccounts(res.data || [], res.accountIdentities)
   }
 }
 

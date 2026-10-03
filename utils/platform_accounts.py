@@ -7,9 +7,10 @@ ACCOUNT_PLATFORMS = {
     12: "yidian", 13: "dayu", 14: "netease", 15: "acfun", 16: "kuaichuan",
     17: "xueqiu", 18: "jingdong", 19: "douban", 20: "csdn", 21: "jianshu",
     22: "chejiahao", 23: "yiche", 24: "dongchedi",
+    25: "wechat", 26: "jd", 27: "xiaohongshu_merchant", 28: "taobao",
 }
 ARTICLE_ACCOUNT_TYPES = frozenset(rules["account_type"] for rules in PLATFORMS.values())
-ARTICLE_ONLY_ACCOUNT_TYPES = frozenset({8, 9, 10, 11, *range(12, 25)})
+ARTICLE_ONLY_ACCOUNT_TYPES = frozenset({8, 9, 10, 11, *range(12, 29)})
 ACCOUNT_UNAVAILABLE_REASONS = {}
 
 ACCOUNT_COOKIE_DOMAINS = {
@@ -21,6 +22,7 @@ ACCOUNT_COOKIE_DOMAINS = {
     18: ("jd.com",), 19: ("douban.com",), 20: ("csdn.net",), 21: ("jianshu.com",),
     22: ("autohome.com.cn",),
     23: ("yiche.com",), 24: ("dcdapp.com",),
+    25: ("mp.weixin.qq.com",), 26: ("jd.com",), 27: ("xiaohongshu.com",), 28: ("taobao.com",),
 }
 
 
@@ -29,7 +31,7 @@ def resolve_account_type(value):
     if isinstance(value, bool):
         raise ValueError("账号平台无效")
     text = str(value).strip().lower()
-    aliases = {"bilibili": 6, "b站": 6, "b站专栏": 6, "视频号": 2, "企鹅号": 11, "微博": 10}
+    aliases = {"bilibili": 6, "b站": 6, "b站专栏": 6, "视频号": 2, "企鹅号": 11, "微博": 10, "公众号": 25, "微信公众号": 25, "京东图文": 26}
     aliases.update({rules["label"].lower(): rules["account_type"] for rules in PLATFORMS.values()})
     if text in aliases:
         return aliases[text]
@@ -49,6 +51,14 @@ def validate_imported_cookie(account_type, payload):
     from utils.articles.session import normalize_article_storage_state
     platform = ACCOUNT_PLATFORMS[account_type]
     state = normalize_article_storage_state(platform, payload)
+    portal_domains = {26: {"jd.com", "dr.jd.com"},
+                      27: {"xiaohongshu.com", "ark.xiaohongshu.com", "customer.xiaohongshu.com"},
+                      28: {"taobao.com", "guanghe.taobao.com", "creator.guanghe.taobao.com", "huodong.taobao.com"}}
+    if account_type in portal_domains:
+        if not any(cookie["value"] and cookie["domain"].lstrip(".").lower() in portal_domains[account_type]
+                   for cookie in state["cookies"]):
+            raise ValueError("Cookie 文件不含目标平台的有效域名凭据")
+        return state
     if not any(cookie["value"] and any(cookie["domain"].lstrip(".").lower() == domain or cookie["domain"].lstrip(".").lower().endswith("." + domain)
                for domain in ACCOUNT_COOKIE_DOMAINS[account_type]) for cookie in state["cookies"]):
         raise ValueError("Cookie 文件不含目标平台的有效域名凭据")

@@ -65,6 +65,9 @@ def validate_task(snapshot: dict, assets: dict) -> Path | None:
     if platform in {"douyin", "chejiahao"} and parsed.links and not options.get("links_as_text"):
         raise ValueError(f"{rules['label']}原生文章不支持正文超链接，请启用“将不支持的超链接转为文字和完整网址”选项")
     validate_assets(snapshot.get("content_html", ""), assets)
+    from utils.articles.notes import NOTE_PLATFORMS, prepare_note_document
+    if platform in NOTE_PLATFORMS:
+        prepare_note_document(snapshot, assets)
     cover_id = snapshot.get("cover_asset_id")
     if cover_id and rules.get("cover_supported") is False:
         raise ValueError(f"{rules['label']}文章不支持单独设置封面")
@@ -365,8 +368,9 @@ async def _verify_final_body(editor, document, platform: str, tags: list[str] | 
         raise PreparationError("平台选项设置后正文不一致，已阻止发布")
     if any(marker in actual for marker in document.markers):
         raise PreparationError("正文仍有未替换的图片标记，已阻止发布")
-    images = state["images"] if state is not None else await editor.evaluate("""el=>Array.from(el.querySelectorAll('img')).map(img=>({
-        src:img.src,ready:img.complete&&img.naturalWidth>0}))""")
+    images = state["images"] if state is not None else await editor.evaluate("""(el, platform)=>Array.from(el.querySelectorAll('img'))
+        .filter(img=>platform!=='wechat'||!img.classList.contains('ProseMirror-separator')).map(img=>({
+        src:img.src,ready:img.complete&&img.naturalWidth>0}))""", platform)
     if len(images) != len(document.image_paths) or not all(item["ready"] for item in images):
         raise PreparationError("正文图片读回不完整，已阻止发布")
     # 部分官方编辑器始终显示本地预览；仅该平台的专用验证器可用本次
@@ -434,6 +438,12 @@ def create_adapter(snapshot, account_file, cover):
     factories = {name: LegacyArticleAdapter for name in ("baijiahao", "zhihu", "toutiao", "sohu")}
     factories.update({name: lambda data, _account, image: create_native_adapter(data, image)
                       for name in ("douyin", "bilibili", "weibo", "qiehao", *EXTENDED_PLATFORMS)})
+    from utils.articles.notes import NOTE_PLATFORMS, create_note_adapter
+    factories.update({name: lambda data, _account, image: create_note_adapter(data, image)
+                      for name in NOTE_PLATFORMS})
+    if platform == "wechat":
+        from utils.articles.wechat import WechatArticleAdapter
+        return WechatArticleAdapter(snapshot, cover)
     factory = factories.get(snapshot.get("platform"))
     if factory is None:
         raise ValueError("不支持的文章发布平台")
@@ -486,20 +496,6 @@ async def _run(snapshot, account_file, assets, on_submit, evidence_dir):
                 request_guard = await install_native_preview_request_guard(page, platform)
                 if not request_guard and not preparation_guard:
                     await install_preview_guard(page)
-            editor = await adapter.open_editor(page)
-            if snapshot["mode"] == "preview" and not request_guard and not preparation_guard:
-                await install_preview_guard(page)
-            await page.bring_to_front()
-            # 原生适配器可安排平台专属的准备顺序，最终仍统一读回所有内容。
-            prepare_editor = getattr(adapter, "prepare_editor", None)
-            if prepare_editor:
-                await prepare_editor(page)
-            if request_guard and not preparation_guard:
-                # 封面准备时请求层已经禁止提交；完成后再禁用编辑器发布按钮。
-                await install_preview_guard(page)
-            await adapter.fill_title(page)
-            await adapter.verify_title(page)
-
             def remember_prepared(document):
                 """即使平台拒绝新版本，也保留最终转换稿和分段图片证据。"""
                 result["prepared_html"] = document.prepared_html
@@ -512,30 +508,51 @@ async def _run(snapshot, account_file, assets, on_submit, evidence_dir):
                 if rules.get("body_max_chars") and len(document.expected_text) > rules["body_max_chars"]:
                     raise PreparationError(f"{rules['label']}转换后正文超过 {rules['body_max_chars']} 字，请调整原稿")
 
-            document = await prepare_and_paste_document(
-                page, editor, render_page, snapshot["content_html"], assets, evidence_dir,
-                getattr(conf, "ARTICLE_RENDER_FONT", "Noto Sans CJK SC,PingFang SC,Microsoft YaHei,sans-serif"),
-                on_prepared=remember_prepared,
-                links_as_text=bool((snapshot.get("options") or {}).get("links_as_text")),
-                paste_handler=getattr(adapter, "paste_document", None))
-            native_images = getattr(adapter, "insert_body_images", None)
-            if native_images:
-                await native_images(page, editor, render_page, document)
+            prepare_note = getattr(adapter, "prepare_note", None)
+            if prepare_note:
+                from utils.articles.notes import prepare_note_document
+                remember_prepared(prepare_note_document(snapshot, assets))
+                editor, document = await prepare_note(page, assets)
+                await page.bring_to_front()
             else:
-                await insert_body_images(page, editor, render_page, document, platform)
-            await adapter.apply_options(page, editor)
-            if snapshot["mode"] == "preview" and preparation_guard:
-                await install_preview_guard(page)
-            await adapter.verify_options(page, editor)
-            await adapter.verify_title(page)
-            await _verify_final_body(
-                editor, document, platform, snapshot.get("tags") or [],
-                rich_verifier=getattr(adapter, "verify_rich_document", None),
-                image_verifier=getattr(adapter, "verify_uploaded_images", None),
-                document_reader=getattr(adapter, "read_document_state", None))
-            verify_body = getattr(adapter, "verify_body", None)
-            if verify_body:
-                await verify_body(page, editor, document)
+                editor = await adapter.open_editor(page)
+                if snapshot["mode"] == "preview" and not request_guard and not preparation_guard:
+                    await install_preview_guard(page)
+                await page.bring_to_front()
+                # 原生适配器可安排平台专属的准备顺序，最终仍统一读回所有内容。
+                prepare_editor = getattr(adapter, "prepare_editor", None)
+                if prepare_editor:
+                    await prepare_editor(page)
+                if request_guard and not preparation_guard:
+                    # 封面准备时请求层已经禁止提交；完成后再禁用编辑器发布按钮。
+                    await install_preview_guard(page)
+                await adapter.fill_title(page)
+                await adapter.verify_title(page)
+
+                document = await prepare_and_paste_document(
+                    page, editor, render_page, snapshot["content_html"], assets, evidence_dir,
+                    getattr(conf, "ARTICLE_RENDER_FONT", "Noto Sans CJK SC,PingFang SC,Microsoft YaHei,sans-serif"),
+                    on_prepared=remember_prepared,
+                    links_as_text=bool((snapshot.get("options") or {}).get("links_as_text")),
+                    paste_handler=getattr(adapter, "paste_document", None))
+                native_images = getattr(adapter, "insert_body_images", None)
+                if native_images:
+                    await native_images(page, editor, render_page, document)
+                else:
+                    await insert_body_images(page, editor, render_page, document, platform)
+                await adapter.apply_options(page, editor)
+                if snapshot["mode"] == "preview" and preparation_guard:
+                    await install_preview_guard(page)
+                await adapter.verify_options(page, editor)
+                await adapter.verify_title(page)
+                await _verify_final_body(
+                    editor, document, platform, snapshot.get("tags") or [],
+                    rich_verifier=getattr(adapter, "verify_rich_document", None),
+                    image_verifier=getattr(adapter, "verify_uploaded_images", None),
+                    document_reader=getattr(adapter, "read_document_state", None))
+                verify_body = getattr(adapter, "verify_body", None)
+                if verify_body:
+                    await verify_body(page, editor, document)
             name = await save_screenshot(page, evidence_dir, "prepared.png")
             if name:
                 result["evidence"].append(name)

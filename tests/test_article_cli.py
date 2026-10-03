@@ -16,6 +16,7 @@ import requests
 import sau_cli
 from utils.articles.cli import ArticleApiClient, ArticleCliError, prepare_content
 from utils.articles.platforms import PLATFORMS
+from utils.account_bindings import bind_account
 
 
 def response(data=None, *, code=200, status=200, msg="处理完成"):
@@ -328,6 +329,8 @@ class ArticleCliApiIntegrationTests(unittest.TestCase):
             rows.append((kind, kind, f"{platform}.json", f"隔离{platform}账号", 1))
         with sqlite3.connect(self.database) as connection:
             connection.executemany("INSERT INTO user_info VALUES (?,?,?,?,?)", rows)
+            for platform, kind in platforms.items():
+                bind_account(connection, kind, platform, source="test-fixture")
 
         article_file = self.base / "新平台原稿.md"
         article_file.write_text("# 保留格式\n\n新平台文章的完整正文。", encoding="utf-8")
@@ -411,6 +414,86 @@ class ArticleCliApiIntegrationTests(unittest.TestCase):
             self.assertFalse(task["submit_started"])
             self.assertEqual(task["platform_url"], "")
 
+    def test_note_and_wechat_selectors_preserve_import_modes_and_preview_boundaries(self):
+        """七个合入目标使用独立账号和明确转换设置，CLI 复用真实素材与快照服务。"""
+        from PIL import Image
+        from utils.articles.platforms import NOTE_PLATFORMS
+        from utils.articles.service import ArticleService
+        platforms = {"xiaohongshu": 1, "tencent": 2, "kuaishou": 4, "wechat": 25,
+                     "jd": 26, "xiaohongshu_merchant": 27, "taobao": 28}
+        rows = []
+        for platform, kind in platforms.items():
+            filename = f"独立-{platform}.json"
+            (self.base / "cookiesFile" / filename).write_text('{"cookies":[],"origins":[]}', encoding="utf-8")
+            rows.append((100 + kind, kind, filename, f"隔离{platform}账号", 1))
+        with sqlite3.connect(self.database) as connection:
+            connection.executemany("INSERT INTO user_info VALUES (?,?,?,?,?)", rows)
+            for platform, kind in platforms.items():
+                bind_account(connection, 100 + kind, platform, source="test-fixture")
+        first, second = self.base / "首图.png", self.base / "第二图.png"
+        Image.new("RGB", (800, 800), "white").save(first)
+        Image.new("RGB", (800, 800), "blue").save(second)
+        article_file = self.base / "图文原稿.md"
+        article_file.write_text("# 保留原稿结构\n\n图文的完整正文和[资料](https://example.com/source)。\n\n![首图](首图.png)\n\n![第二图](第二图.png)", encoding="utf-8")
+        defaults = {platform: {"title": f"{PLATFORMS[platform]['label']}图文测试标题",
+                    "options": {"flatten_content": True} if platform in NOTE_PLATFORMS else {"author": "测试作者", "summary": "文章摘要"}}
+                    for platform in platforms}
+        defaults["jd"]["options"]["product_links"] = "https://item.jd.com/12345678.html"
+        defaults["xiaohongshu_merchant"]["options"].update(shop_name="测试商家店铺", product_id="12345678")
+        defaults["taobao"]["options"]["statement"] = "内容无需标注"
+        options_file = self.base / "图文选项.json"
+        options_file.write_text(json.dumps(defaults, ensure_ascii=False), encoding="utf-8")
+        code, imported = self.command("import", "--file", str(article_file), "--title", "独立多平台图文测试原稿",
+                                      "--cover", str(first), "--platform-options", str(options_file))
+        self.assertEqual(code, 0, imported)
+        article = imported["data"]
+        self.assertEqual(article["platform_options"], defaults)
+        self.assertIn("<h1>", article["content_html"])
+        self.assertIn('<a href="https://example.com/source"', article["content_html"])
+        batches = {}
+        for platform, kind in platforms.items():
+            with self.subTest(platform=platform):
+                code, accounts = self.command("accounts", "--platform", platform)
+                self.assertEqual(code, 0, accounts)
+                self.assertEqual([(item["id"], item["platform"]) for item in accounts["data"]], [(100 + kind, platform)])
+                self.assertNotIn("filePath", json.dumps(accounts))
+                args = ("publish", article["id"], "--platform", platform, "--account-id", str(100 + kind),
+                        "--preview", "--idempotency-key", f"merged-preview-{platform}")
+                code, result = self.command(*args)
+                self.assertEqual(code, 0, result)
+                task = result["data"]["tasks"][0]
+                self.assertEqual((task["platform"], task["account_id"], task["status"]), (platform, 100 + kind, "queued"), task)
+                batches[platform] = result["data"]["id"]
+                code, replay = self.command(*args)
+                self.assertEqual(code, 0, replay)
+                self.assertEqual(replay["data"]["id"], batches[platform])
+        observed = set()
+        def runner(snapshot, cookie_file, assets, on_submit, evidence_dir):
+            platform = snapshot["platform"]
+            observed.add(platform)
+            self.assertEqual(cookie_file.name, f"独立-{platform}.json")
+            self.assertEqual(snapshot["title"], defaults[platform]["title"])
+            self.assertEqual(snapshot["content_html"], article["content_html"])
+            self.assertEqual(snapshot["options"], defaults[platform]["options"])
+            self.assertEqual(len(assets), 2)
+            self.assertIn(snapshot["cover_asset_id"], assets)
+            self.assertEqual({Path(asset["path"]).read_bytes() for asset in assets.values()}, {first.read_bytes(), second.read_bytes()})
+            return {"status": "previewed", "message": "隔离图文预览"}
+        service = ArticleService(self.database, self.base / "articleData" / "assets", self.base / "cookiesFile",
+                                 self.base / "articleData" / "evidence", runner=runner)
+        self.assertTrue(service.acquire())
+        while service.run_next():
+            pass
+        self.assertEqual(observed, set(platforms))
+        self.assertEqual(len(service.batches()), 7)
+        for batch_id in batches.values():
+            task = service.get_batch(batch_id)["tasks"][0]
+            self.assertEqual(task["status"], "previewed", task)
+            self.assertFalse(task["submit_started"])
+        code, saved = self.command("get", article["id"])
+        self.assertEqual(code, 0, saved)
+        self.assertEqual(saved["data"]["content_html"], article["content_html"])
+
     def test_real_api_import_update_preview_publish_and_resolve(self):
         from PIL import Image
         from utils.articles.service import ArticleService
@@ -435,7 +518,7 @@ class ArticleCliApiIntegrationTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in accounts["data"]], [1])
         self.assertNotIn("filePath", str(accounts))
         code, caps = self.command("capabilities")
-        self.assertEqual(len(caps["data"]["platforms"]), 21)
+        self.assertEqual(len(caps["data"]["platforms"]), 28)
         self.assertEqual({item["platform"] for item in caps["data"]["platforms"] if item["live_verified"]},
                          {"douyin"})
 

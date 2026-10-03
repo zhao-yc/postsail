@@ -256,7 +256,7 @@ const fetchDashboardData = async () => {
     ])
 
     if (accountRes.status === 'fulfilled' && accountRes.value.code === 200) {
-      accountStore.setAccounts(accountRes.value.data)
+      accountStore.setAccounts(accountRes.value.data, accountRes.value.accountIdentities)
     }
     if (materialRes.status === 'fulfilled' && materialRes.value.code === 200) {
       appStore.setMaterials(materialRes.value.data)

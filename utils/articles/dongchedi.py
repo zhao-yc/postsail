@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 from utils.articles.browser import (
     PreparationError, body_sequence, inspect_text, is_uploaded_image, normalize_text,
-    verify_rich_structure, _clipboard_image,
+    verify_rich_structure, _clipboard_image, _EXTERNAL_RECEIPT_TEXTS, has_visible_challenge,
 )
 from utils.articles.jingdong import _COMMITTED_FIBER
 from utils.articles.native import NativeArticleAdapter, _unique, _value
@@ -83,6 +83,13 @@ class DongchediArticleAdapter(NativeArticleAdapter):
         self._response_tasks = set()
         self._receipt_event = asyncio.Event()
         self._guard_installed = False
+        self._challenge_seen = False
+
+    async def _has_challenge(self, page):
+        """只读编辑器外的可见验证码或反馈；正文讨论验证码不算验证弹层。"""
+        feedback = await page.locator('[role="alert"],.arco-message,.ant-message,.m-message').evaluate_all(
+            _EXTERNAL_RECEIPT_TEXTS)
+        return await has_visible_challenge(page, feedback)
 
     def _validate_destination(self, page):
         url = urlparse(page.url)
@@ -124,6 +131,8 @@ class DongchediArticleAdapter(NativeArticleAdapter):
         await self.install_preparation_guard(page)
         editor = await super().open_editor(page)
         self._validate_destination(page)
+        if await self._has_challenge(page):
+            raise PreparationError("懂车号要求安全验证，请先在平台完成验证")
         for _ in range(60):
             native = await self._read_native(page)
             if native["inited"]:
@@ -426,9 +435,13 @@ class DongchediArticleAdapter(NativeArticleAdapter):
         page.on("response", listen)
 
     async def submit(self, page, on_submit):
-        self._validate_destination(page)
         if self.snapshot.get("mode") != "publish" or self._document is None:
             raise PreparationError("懂车号当前是预览模式或尚未准备完成")
+        if self._submit_started:
+            raise PreparationError("本任务已经尝试提交，请先核对平台记录，勿重复提交")
+        self._validate_destination(page)
+        if await self._has_challenge(page):
+            raise PreparationError("懂车号要求安全验证，请先在平台完成验证")
         editor = await _unique(page.locator(self.editor_selector), "懂车号文章正文")
         await self.verify_title(page)
         await self.verify_options(page, editor)
@@ -441,6 +454,9 @@ class DongchediArticleAdapter(NativeArticleAdapter):
         handled = set()
         for _ in range(60):
             if self._allowed_request is not None:
+                return
+            if await self._has_challenge(page):
+                self._challenge_seen = True
                 return
             dialogs = page.locator('.arco-modal:visible')
             for index in range(await dialogs.count()):
@@ -468,5 +484,10 @@ class DongchediArticleAdapter(NativeArticleAdapter):
                 await asyncio.wait_for(self._receipt_event.wait(), timeout=.5)
             except asyncio.TimeoutError:
                 pass
+        if self._receipt is None and self._submit_started and await self._has_challenge(page):
+            self._challenge_seen = True
+        if self._receipt is None and self._challenge_seen:
+            # 提交边界之后保持 unknown，提示人工验证也不能暗示可以自动重发。
+            return {"status": "unknown", "message": "懂车号要求人工安全验证；已尝试提交，请先核对平台记录，勿重复提交"}
         return dict(self._receipt) if self._receipt else {
             "status": "unknown", "message": "尚未取得懂车号明确文章提交回执，请核对平台记录，勿重复提交"}

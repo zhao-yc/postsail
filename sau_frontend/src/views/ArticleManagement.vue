@@ -4,7 +4,7 @@
       <div>
         <p class="workspace-kicker">内容发布 / 文章</p>
         <h1>文章工作台</h1>
-        <p class="workspace-description">准备一份图文，分别发布到所选平台。官网沿用独立发布流程。</p>
+        <p class="workspace-description">准备一份图文，分别发布到所选平台；支持文章和图文笔记。</p>
       </div>
       <el-button @click="createDraft"><el-icon><Plus /></el-icon>新建文章</el-button>
     </header>
@@ -73,13 +73,26 @@
 
       <aside class="distribution-panel">
         <div class="distribution-heading"><h2>发布到</h2><span>{{ selectedAccountIds.length }} 个账号</span></div>
+        <el-alert v-if="accounts.some((account) => account.needs_confirmation)" type="warning" :closable="false" show-icon>
+          旧账号的平台编号存在冲突，请先到 <router-link to="/account-management">账号管理</router-link> 确认所属平台，确认后才能选择发布。
+        </el-alert>
         <p class="distribution-caption">选择平台账号；留空的覆盖项沿用文章内容。</p>
-        <div v-for="platform in capabilities" :key="platform.platform" class="platform-section">
+        <label class="platform-filter-label" for="article-platform-filter">筛选平台</label>
+        <el-select id="article-platform-filter" v-model="platformFilter" aria-label="筛选发布平台" class="platform-filter">
+          <el-option :label="`全部平台（${capabilities.length}）`" value="all" />
+          <el-option v-for="platform in capabilities" :key="platform.platform" :label="platform.label" :value="platform.platform">
+            <span>{{ platform.label }}</span><span class="platform-option-count">{{ accountsFor(platform.platform).length }} 个账号</span>
+          </el-option>
+        </el-select>
+        <p v-if="platformFilter !== 'all'" class="capability-note">筛选只影响展示，其他平台已选账号仍会发布。</p>
+        <div v-for="platform in visiblePlatforms" :key="platform.platform" class="platform-section">
           <div class="platform-heading"><span class="platform-mark">{{ platform.label.slice(0, 1) }}</span><h3>{{ platform.label }}</h3></div>
           <p class="capability-note">{{ platform.content_kind || '文章' }} · {{ platform.available === false ? '待接入' : platform.live_verified ? '已完成基础流程验证' : '真实账号待验证' }}</p>
           <p class="capability-note">{{ verificationHint(platform) }}</p>
           <p v-if="platform.verification_scope" class="capability-note">验证范围：{{ platform.verification_scope }}</p>
           <p class="capability-note">{{ titleHint(platform) }} · {{ coverDescription(platform) }}{{ coverHint(platform) }}</p>
+          <p v-if="platform.content_mode === 'image_text'" class="capability-note">描述最多 {{ platform.body_max_chars }} 字（含话题），图片 1–{{ platform.body_max_images }} 张（含封面）。</p>
+          <p v-if="platform.image_min_width && platform.image_min_height" class="capability-note">每张图片至少 {{ platform.image_min_width }} × {{ platform.image_min_height }} 像素。</p>
           <p v-if="platform.reason || platform.limitations" class="capability-note">{{ platform.reason || platform.limitations }}</p>
           <p v-if="platform.permission_check" class="capability-note">{{ platform.permission_check }}</p>
           <div v-if="accountsFor(platform.platform).length" class="account-options">
@@ -218,6 +231,8 @@ import { articleUrl, articlesApi } from '@/api/articles'
 const articles = ref([])
 const accounts = ref([])
 const capabilities = ref([])
+const platformFilter = ref('all')
+const visiblePlatforms = computed(() => capabilities.value.filter((platform) => platformFilter.value === 'all' || platform.platform === platformFilter.value))
 const batches = ref([])
 const search = ref('')
 const initialLoading = ref(true)
@@ -697,6 +712,9 @@ h1 { font-family: 'Songti SC', 'Noto Serif CJK SC', serif; font-size: 30px; font
 .distribution-panel { background: #f9fbf8; border: 1px solid var(--line); padding: 22px 20px; border-radius: 5px; }
 .distribution-heading h2 { font-size: 17px; margin: 0; font-weight: 600; }
 .distribution-caption { font-size: 12px; color: var(--muted); line-height: 1.7; margin: 0 0 14px; }
+.platform-filter-label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 7px; }
+.platform-filter { width: 100%; margin-bottom: 15px; }
+.platform-option-count { float: right; margin-left: 20px; color: var(--muted); font-size: 11px; }
 .platform-section { padding: 18px 0; border-top: 1px solid var(--line); }
 .platform-heading { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
 .platform-heading h3 { font-size: 14px; margin: 0; }
@@ -714,6 +732,9 @@ h1 { font-family: 'Songti SC', 'Noto Serif CJK SC', serif; font-size: 30px; font
 .target-overrides label { display: block; margin: 12px 0 6px; font-size: 11px; color: #66796d; }
 .target-overrides small { display: block; font-size: 10px; color: var(--muted); margin-top: 5px; line-height: 1.5; }
 .target-overrides :deep(.el-select) { width: 100%; }
+.target-overrides :deep(.el-checkbox) { max-width: 100%; height: auto; align-items: flex-start; white-space: normal; }
+.target-overrides :deep(.el-checkbox__label) { white-space: normal; line-height: 1.6; overflow-wrap: anywhere; }
+.target-overrides :deep(.el-checkbox__input) { margin-top: 4px; }
 .override-cover { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
 .override-cover img { width: 56px; height: 36px; object-fit: cover; }
 .option-cover img { width: 54px; height: 72px; object-fit: contain; }

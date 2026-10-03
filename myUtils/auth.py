@@ -196,6 +196,11 @@ async def check_cookie(type, file_path):
 
 
 ARTICLE_LOGIN_PROBES = {
+    'wechat': {'url': 'https://mp.weixin.qq.com/', 'host': 'mp.weixin.qq.com', 'selector': '#menuBar a[href*="/cgi-bin/appmsg"]:visible, #menuBar a[href*="/cgi-bin/appmsgpublish"]:visible, .weui-desktop-layout__side a[href*="/cgi-bin/appmsg"]:visible, a[href*="action=logout"]:visible'},
+    'jd': {'url': 'https://dr.jd.com/n/home.html', 'host': 'dr.jd.com', 'path_prefix': '/n/', 'identity_script': "() => { const user = window._gdata && window._gdata.user; return !!(user && (typeof user.id === 'number' || typeof user.id === 'string') && /^[1-9]\\d*$/.test(String(user.id)) && typeof user.pin === 'string' && user.pin.trim()); }"},
+    'xiaohongshu_merchant': {'url': 'https://ark.xiaohongshu.com/ark/home', 'host': 'ark.xiaohongshu.com', 'selectors': ['.store-name:visible'], 'text_selector': '.store-name:visible'},
+    'taobao': {'url': 'https://creator.guanghe.taobao.com/', 'host': 'creator.guanghe.taobao.com', 'selectors': ['img[data-autolog-container="user_content_account"]:visible', '[data-autolog*="text=用户模块-账号管理"]:visible', '[data-autolog*="text=发布作品"]:visible'], 'text_selector': '[data-autolog*="text=用户模块-账号管理"]:visible', 'text_exclusions': {'逛逛号', '账号管理', '账号正常'}},
+
     "weibo": {"url": "https://card.weibo.com/article/v3/editor", "host": "card.weibo.com",
               "selector": 'textarea[placeholder="请输入标题"], .ProseMirror[contenteditable="true"]'},
     "qiehao": {"url": "https://om.qq.com/main/creation/article", "host": "om.qq.com",
@@ -258,6 +263,25 @@ ARTICLE_LOGIN_PROBES = {
                           /^[1-9]\\d*$/.test(String(id)));
                   }"""},
 }
+
+
+def _article_probe_location_matches(url, platform, probe):
+    """登录地址与后台地址共用域名时，仍须验证路径和平台要求的令牌。"""
+    from urllib.parse import parse_qs, urlparse
+    parsed = urlparse(url)
+    if not _article_probe_host_matches(url, probe):
+        return False
+    if any(value in (parsed.path + "#" + parsed.fragment).lower() for value in ("login", "signin", "userauth")):
+        return False
+    if probe.get("path") and parsed.path.rstrip("/") != probe["path"]:
+        return False
+    if probe.get("path_prefix") and not parsed.path.startswith(probe["path_prefix"]):
+        return False
+    if platform == "wechat":
+        token = parse_qs(parsed.query).get("token", [""])[0]
+        if not parsed.path.startswith("/cgi-bin/") or not token.isascii() or not token.isdigit() or int(token) == 0:
+            return False
+    return True
 
 
 def _article_probe_host_matches(url, probe):
@@ -341,13 +365,31 @@ async def article_account_is_logged_in(page, platform, timeout=10_000):
     """必须同时命中平台后台域名和正向编辑器或导航标识，避免超时误判成功。"""
     probe = ARTICLE_LOGIN_PROBES[platform]
     try:
-        if not _article_probe_host_matches(page.url, probe):
+        if not _article_probe_location_matches(page.url, platform, probe):
             return False
-        if platform not in {"weibo", "qiehao"}:
+        if platform in {"xiaohongshu_merchant", "taobao"}:
+            for selector in probe.get("selectors", []):
+                await page.locator(selector).first.wait_for(state="visible", timeout=timeout)
+            field = page.locator(probe["text_selector"])
+            if await field.count() != 1:
+                return False
+            if not any(line.strip() and line.strip() not in probe.get("text_exclusions", set())
+                       for line in (await field.first.inner_text()).splitlines()):
+                return False
+            challenge = page.locator('iframe[src*="captcha"]:visible, iframe[src*="geetest"]:visible, '
+                                     '[role="dialog"]:has-text("请完成验证"):visible, '
+                                     '[role="dialog"]:has-text("安全验证"):visible')
+            return not await challenge.count() and _article_probe_location_matches(page.url, platform, probe)
+        if platform not in {"weibo", "qiehao", "wechat"}:
+            if platform == "jd" and await page.locator(
+                    'iframe[src*="captcha"]:visible, iframe[src*="geetest"]:visible, '
+                    '[role="dialog"]:has-text("请完成验证"):visible, '
+                    '[role="dialog"]:has-text("安全验证"):visible').count():
+                return False
             identity = await _article_positive_identity(page, platform, probe, timeout)
             if identity is None:
                 identity = await _article_editor_is_ready(page, probe, timeout)
-            return identity is True and _article_probe_host_matches(page.url, probe)
+            return identity is True and _article_probe_location_matches(page.url, platform, probe)
         if platform == "weibo":
             import re
             # 入口首先展示已认证的草稿列表；校验只读列表，不能为查登录创建新草稿。
@@ -362,7 +404,7 @@ async def article_account_is_logged_in(page, platform, timeout=10_000):
         else:
             # 企鹅号只接受后台导航/账号操作，公开首页的「内容管理」宣传文字不能通过。
             await page.locator(probe["selector"]).first.wait_for(state="visible", timeout=timeout)
-        return _article_probe_host_matches(page.url, probe)
+        return _article_probe_location_matches(page.url, platform, probe)
     except Exception:
         return False
 

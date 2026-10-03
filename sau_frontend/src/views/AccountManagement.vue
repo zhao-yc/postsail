@@ -61,9 +61,10 @@
                 </el-table-column>
                 <el-table-column label="操作">
                   <template #default="scope">
-                    <el-button size="small" @click="handleEdit(scope.row)">编辑</el-button>
+                    <el-button v-if="scope.row.needsConfirmation" size="small" type="warning" @click="handleConfirmPlatform(scope.row)">确认所属平台</el-button>
+                    <el-button size="small" :disabled="scope.row.needsConfirmation" @click="handleEdit(scope.row)">编辑</el-button>
                     <el-button size="small" type="primary" :icon="Download" @click="handleDownloadCookie(scope.row)">下载Cookie</el-button>
-                    <el-button size="small" type="info" :icon="Upload" :disabled="Boolean(ACCOUNT_UNAVAILABLE_REASONS[scope.row.type])" @click="handleUploadCookie(scope.row)">上传Cookie</el-button>
+                    <el-button size="small" type="info" :icon="Upload" :disabled="scope.row.needsConfirmation || Boolean(ACCOUNT_UNAVAILABLE_REASONS[scope.row.type])" @click="handleUploadCookie(scope.row)">上传Cookie</el-button>
                     <el-button size="small" type="danger" @click="handleDelete(scope.row)">删除</el-button>
                   </template>
                 </el-table-column>
@@ -131,7 +132,8 @@
                 </el-table-column>
                 <el-table-column label="操作">
                   <template #default="scope">
-                    <el-button size="small" @click="handleEdit(scope.row)">编辑</el-button>
+                    <el-button v-if="scope.row.needsConfirmation" size="small" type="warning" @click="handleConfirmPlatform(scope.row)">确认所属平台</el-button>
+                    <el-button size="small" :disabled="scope.row.needsConfirmation" @click="handleEdit(scope.row)">编辑</el-button>
                     <el-button size="small" type="primary" :icon="Download" @click="handleDownloadCookie(scope.row)">下载Cookie</el-button>
                     <el-button size="small" type="info" :icon="Upload" @click="handleUploadCookie(scope.row)">上传Cookie</el-button>
                     <el-button size="small" type="danger" @click="handleDelete(scope.row)">删除</el-button>
@@ -201,7 +203,8 @@
                 </el-table-column>
                 <el-table-column label="操作">
                   <template #default="scope">
-                    <el-button size="small" @click="handleEdit(scope.row)">编辑</el-button>
+                    <el-button v-if="scope.row.needsConfirmation" size="small" type="warning" @click="handleConfirmPlatform(scope.row)">确认所属平台</el-button>
+                    <el-button size="small" :disabled="scope.row.needsConfirmation" @click="handleEdit(scope.row)">编辑</el-button>
                     <el-button size="small" type="primary" :icon="Download" @click="handleDownloadCookie(scope.row)">下载Cookie</el-button>
                     <el-button size="small" type="info" :icon="Upload" @click="handleUploadCookie(scope.row)">上传Cookie</el-button>
                     <el-button size="small" type="danger" @click="handleDelete(scope.row)">删除</el-button>
@@ -271,7 +274,8 @@
                 </el-table-column>
                 <el-table-column label="操作">
                   <template #default="scope">
-                    <el-button size="small" @click="handleEdit(scope.row)">编辑</el-button>
+                    <el-button v-if="scope.row.needsConfirmation" size="small" type="warning" @click="handleConfirmPlatform(scope.row)">确认所属平台</el-button>
+                    <el-button size="small" :disabled="scope.row.needsConfirmation" @click="handleEdit(scope.row)">编辑</el-button>
                     <el-button size="small" type="primary" :icon="Download" @click="handleDownloadCookie(scope.row)">下载Cookie</el-button>
                     <el-button size="small" type="info" :icon="Upload" @click="handleUploadCookie(scope.row)">上传Cookie</el-button>
                     <el-button size="small" type="danger" @click="handleDelete(scope.row)">删除</el-button>
@@ -341,7 +345,8 @@
                 </el-table-column>
                 <el-table-column label="操作">
                   <template #default="scope">
-                    <el-button size="small" @click="handleEdit(scope.row)">编辑</el-button>
+                    <el-button v-if="scope.row.needsConfirmation" size="small" type="warning" @click="handleConfirmPlatform(scope.row)">确认所属平台</el-button>
+                    <el-button size="small" :disabled="scope.row.needsConfirmation" @click="handleEdit(scope.row)">编辑</el-button>
                     <el-button size="small" type="primary" :icon="Download" @click="handleDownloadCookie(scope.row)">下载Cookie</el-button>
                     <el-button size="small" type="info" :icon="Upload" @click="handleUploadCookie(scope.row)">上传Cookie</el-button>
                     <el-button size="small" type="danger" @click="handleDelete(scope.row)">删除</el-button>
@@ -411,7 +416,8 @@
                 </el-table-column>
                 <el-table-column label="操作">
                   <template #default="scope">
-                    <el-button size="small" @click="handleEdit(scope.row)">编辑</el-button>
+                    <el-button v-if="scope.row.needsConfirmation" size="small" type="warning" @click="handleConfirmPlatform(scope.row)">确认所属平台</el-button>
+                    <el-button size="small" :disabled="scope.row.needsConfirmation" @click="handleEdit(scope.row)">编辑</el-button>
                     <el-button size="small" type="primary" :icon="Download" @click="handleDownloadCookie(scope.row)">下载Cookie</el-button>
                     <el-button size="small" type="info" :icon="Upload" @click="handleUploadCookie(scope.row)">上传Cookie</el-button>
                     <el-button size="small" type="danger" @click="handleDelete(scope.row)">删除</el-button>
@@ -481,7 +487,8 @@
                 </el-table-column>
                 <el-table-column label="操作">
                   <template #default="scope">
-                    <el-button size="small" @click="handleEdit(scope.row)">编辑</el-button>
+                    <el-button v-if="scope.row.needsConfirmation" size="small" type="warning" @click="handleConfirmPlatform(scope.row)">确认所属平台</el-button>
+                    <el-button size="small" :disabled="scope.row.needsConfirmation" @click="handleEdit(scope.row)">编辑</el-button>
                     <el-button size="small" type="primary" :icon="Download" @click="handleDownloadCookie(scope.row)">下载Cookie</el-button>
                     <el-button size="small" type="info" :icon="Upload" @click="handleUploadCookie(scope.row)">上传Cookie</el-button>
                     <el-button size="small" type="danger" @click="handleDelete(scope.row)">删除</el-button>
@@ -551,7 +558,8 @@
                 </el-table-column>
                 <el-table-column label="操作">
                   <template #default="scope">
-                    <el-button size="small" @click="handleEdit(scope.row)">编辑</el-button>
+                    <el-button v-if="scope.row.needsConfirmation" size="small" type="warning" @click="handleConfirmPlatform(scope.row)">确认所属平台</el-button>
+                    <el-button size="small" :disabled="scope.row.needsConfirmation" @click="handleEdit(scope.row)">编辑</el-button>
                     <el-button size="small" type="primary" :icon="Download" @click="handleDownloadCookie(scope.row)">下载Cookie</el-button>
                     <el-button size="small" type="info" :icon="Upload" @click="handleUploadCookie(scope.row)">上传Cookie</el-button>
                     <el-button size="small" type="danger" @click="handleDelete(scope.row)">删除</el-button>
@@ -621,7 +629,8 @@
                 </el-table-column>
                 <el-table-column label="操作">
                   <template #default="scope">
-                    <el-button size="small" @click="handleEdit(scope.row)">编辑</el-button>
+                    <el-button v-if="scope.row.needsConfirmation" size="small" type="warning" @click="handleConfirmPlatform(scope.row)">确认所属平台</el-button>
+                    <el-button size="small" :disabled="scope.row.needsConfirmation" @click="handleEdit(scope.row)">编辑</el-button>
                     <el-button size="small" type="primary" :icon="Download" @click="handleDownloadCookie(scope.row)">下载Cookie</el-button>
                     <el-button size="small" type="info" :icon="Upload" @click="handleUploadCookie(scope.row)">上传Cookie</el-button>
                     <el-button size="small" type="danger" @click="handleDelete(scope.row)">删除</el-button>
@@ -691,7 +700,8 @@
                 </el-table-column>
                 <el-table-column label="操作">
                   <template #default="scope">
-                    <el-button size="small" @click="handleEdit(scope.row)">编辑</el-button>
+                    <el-button v-if="scope.row.needsConfirmation" size="small" type="warning" @click="handleConfirmPlatform(scope.row)">确认所属平台</el-button>
+                    <el-button size="small" :disabled="scope.row.needsConfirmation" @click="handleEdit(scope.row)">编辑</el-button>
                     <el-button size="small" type="primary" :icon="Download" @click="handleDownloadCookie(scope.row)">下载Cookie</el-button>
                     <el-button size="small" type="info" :icon="Upload" @click="handleUploadCookie(scope.row)">上传Cookie</el-button>
                     <el-button size="small" type="danger" @click="handleDelete(scope.row)">删除</el-button>
@@ -736,9 +746,10 @@
               </el-table-column>
               <el-table-column label="操作">
                 <template #default="scope">
-                  <el-button size="small" @click="handleEdit(scope.row)">编辑</el-button>
+                  <el-button v-if="scope.row.needsConfirmation" size="small" type="warning" @click="handleConfirmPlatform(scope.row)">确认所属平台</el-button>
+                    <el-button size="small" :disabled="scope.row.needsConfirmation" @click="handleEdit(scope.row)">编辑</el-button>
                   <el-button size="small" type="primary" :icon="Download" @click="handleDownloadCookie(scope.row)">下载Cookie</el-button>
-                  <el-button size="small" type="info" :icon="Upload" :disabled="Boolean(platform.notice)" @click="handleUploadCookie(scope.row)">上传Cookie</el-button>
+                  <el-button size="small" type="info" :icon="Upload" :disabled="scope.row.needsConfirmation || Boolean(platform.notice)" @click="handleUploadCookie(scope.row)">上传Cookie</el-button>
                   <el-button size="small" type="danger" @click="handleDelete(scope.row)">删除</el-button>
                 </template>
               </el-table-column>
@@ -749,6 +760,19 @@
       </el-tabs>
     </div>
     
+    <el-dialog v-model="platformConfirmationVisible" title="确认旧账号所属平台" width="min(520px, calc(100vw - 24px))" :close-on-click-modal="false">
+      <p>{{ platformConfirmation.account?.name }}：{{ platformConfirmation.account?.platformReason }}</p>
+      <p v-if="suggestedPlatformLabel">文件名提示可能是“{{ suggestedPlatformLabel }}”，请按实际账号确认；系统不会自动选择。</p>
+      <el-select v-model="platformConfirmation.platform" placeholder="请选择这个账号实际所属的平台" style="width:100%">
+        <el-option v-for="candidate in platformConfirmation.account?.platformCandidates || []" :key="candidate.platform" :label="candidate.label" :value="candidate.platform" />
+      </el-select>
+      <p>确认前会自动备份数据库。账号、Cookie 文件和发布历史都会保留；确认所属平台不代表登录仍有效。</p>
+      <template #footer>
+        <el-button :disabled="confirmingPlatform" @click="platformConfirmationVisible = false">取消</el-button>
+        <el-button type="primary" :loading="confirmingPlatform" :disabled="!platformConfirmation.platform" @click="submitPlatformConfirmation">确认并保留原账号</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 添加/编辑账号对话框 -->
     <el-dialog
       v-model="dialogVisible"
@@ -864,7 +888,11 @@ const TAB_PLATFORM_TYPE = {
   jianshu: 21,
   chejiahao: 22,
   yiche: 23,
-  dongchedi: 24
+  dongchedi: 24,
+  wechat: 25,
+  jd: 26,
+  xiaohongshu_merchant: 27,
+  taobao: 28
 }
 
 const PLATFORM_LABEL_BY_TYPE = PLATFORM_TYPES
@@ -880,6 +908,31 @@ const getPlatformTypeByLabel = (platformLabel) => {
   return entry ? Number(entry[0]) : null
 }
 
+const platformConfirmationVisible = ref(false)
+const confirmingPlatform = ref(false)
+const platformConfirmation = reactive({ account: null, platform: '' })
+const suggestedPlatformLabel = computed(() => platformConfirmation.account?.platformCandidates.find(
+  candidate => candidate.platform === platformConfirmation.account?.platformSuggestion)?.label || '')
+const handleConfirmPlatform = (account) => {
+  platformConfirmation.account = account
+  platformConfirmation.platform = ''
+  platformConfirmationVisible.value = true
+}
+const submitPlatformConfirmation = async () => {
+  if (!platformConfirmation.platform || confirmingPlatform.value) return
+  confirmingPlatform.value = true
+  try {
+    await http.post('/confirmAccountPlatform', {
+      id: platformConfirmation.account.id, expectedType: platformConfirmation.account.type,
+      platform: platformConfirmation.platform
+    })
+    platformConfirmationVisible.value = false
+    ElMessage.success('所属平台已确认，原账号和会话已保留')
+    await fetchAccountsQuick()
+  } catch { /* 请求层保留具体迁移错误 */ }
+  finally { confirmingPlatform.value = false }
+}
+
 // 搜索关键词
 const searchKeyword = ref('')
 
@@ -888,7 +941,7 @@ const fetchAccountsQuick = async () => {
   try {
     const res = await accountApi.getAccounts()
     if (res.code === 200 && res.data) {
-      accountStore.setAccounts(res.data)
+      accountStore.setAccounts(res.data, res.accountIdentities)
     }
   } catch (error) {
     console.error('快速获取账号数据失败:', error)
@@ -908,9 +961,9 @@ const fetchAccounts = async (platformType = null) => {
     const res = await accountApi.getValidAccounts(platformType)
     if (res.code === 200 && res.data) {
       if (platformType != null) {
-        accountStore.mergeAccounts(res.data)
+        accountStore.mergeAccounts(res.data, res.accountIdentities)
       } else {
-        accountStore.setAccounts(res.data)
+        accountStore.setAccounts(res.data, res.accountIdentities)
       }
       ElMessage.success(`${platformLabel}账号刷新成功`)
       if (appStore.isFirstTimeAccountManagement) {
@@ -955,7 +1008,7 @@ const isStatusClickable = (status) => {
 
 // 获取状态标签类型
 const getStatusTagType = (status) => {
-  if (status === '验证中' || status === '待接入') {
+  if (status === '验证中' || status === '待接入' || status === '平台待确认') {
     return 'info'; // 验证中使用灰色
   } else if (status === '正常') {
     return 'success'; // 正常使用绿色
@@ -1313,7 +1366,10 @@ const connectSSE = (platform, name) => {
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5409'
   // Vite 开发代理会缓冲 SSE 长连接，登录流直接连接后端端口
   const sseBaseUrl = baseUrl.startsWith('/') ? 'http://localhost:5409' : baseUrl
-  const url = `${sseBaseUrl}/login?type=${type}&id=${encodeURIComponent(name)}`
+  const platformId = Object.entries(TAB_PLATFORM_TYPE).find(([, value]) => value === type)?.[0]
+  const canonicalPlatform = platformId === 'channels' ? 'tencent' : platformId
+  const existingAccount = dialogType.value === 'edit' && accountForm.id ? `&accountId=${accountForm.id}` : ''
+  const url = `${sseBaseUrl}/login?type=${type}&platform=${encodeURIComponent(canonicalPlatform)}&id=${encodeURIComponent(name)}${existingAccount}`
 
   eventSource = new EventSource(url)
 

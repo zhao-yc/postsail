@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 from flask import Flask
 from PIL import Image
 
+from utils.account_bindings import bind_account
 from utils.articles.assets import ArticleAssets, download_image, public_url
 from utils.articles.model import ArticleError, clean_content
 from utils.articles.platforms import PLATFORMS
@@ -79,6 +80,8 @@ class ArticlesTest(unittest.TestCase):
             targets.append({"platform": platform, "account_id": kind})
         with self.service.store.connect(write=True) as conn:
             conn.executemany("INSERT INTO user_info VALUES (?,?,?,?,?)", rows)
+            for platform, kind in NEW_PLATFORM_TYPES.items():
+                bind_account(conn, kind, platform, source="test-fixture")
         return targets
 
     def prepare_new_platform_article(self):
@@ -803,7 +806,7 @@ class ArticlesTest(unittest.TestCase):
         with other.store.connect() as conn:
             self.assertEqual(tuple(conn.execute("SELECT * FROM file_info").fetchone()), (7, "旧视频素材.mp4"))
 
-    def test_acceptance_fixture_all_twenty_one_platforms(self):
+    def test_acceptance_fixture_existing_twenty_one_article_platforms(self):
         """二十一个平台共用完整测试稿；仅在隔离执行边界模拟回执。"""
         root = Path(__file__).parent / "fixtures" / "article-acceptance"
         content = (root / "原稿.md").read_text(encoding="utf-8")
@@ -863,7 +866,7 @@ class ArticlesTest(unittest.TestCase):
                 with self.subTest(platform=task["platform"], mode=mode):
                     self.assertEqual(task["status"], expected, task)
                     self.assertEqual(bool(task["submit_started"]), mode == "publish")
-        self.assertEqual(set(observed), {(platform, mode) for platform in PLATFORMS for mode in ("preview", "publish")})
+        self.assertEqual(set(observed), {(target["platform"], mode) for target in targets for mode in ("preview", "publish")})
         self.assertEqual(len(observed), 42)
 
     def test_schedule_explicitly_rejected(self):
@@ -1006,8 +1009,217 @@ class ArticlesTest(unittest.TestCase):
         self.assertEqual(client.get("/api/articles").json["data"][0]["id"], self.article["id"])
         self.assertEqual(client.patch(f'/api/articles/{self.article["id"]}', json={"expected_revision": 0}).status_code, 409)
         caps = client.get("/api/article-capabilities").json["data"]["platforms"]
-        self.assertEqual(len(caps), 21)
+        self.assertEqual(len(caps), 28)
         self.assertTrue(all(not item["scheduled"] for item in caps))
+
+
+    def test_new_image_text_platforms_preflight_in_same_batch(self):
+        """新增笔记与文章共用批次，转换明确且公众号与视频号账号不混用。"""
+        asset = self.service.assets.save(image_bytes(), "图文封面.png")
+        for name in ("xhs.json", "ks.json", "channels.json", "wechat.json"):
+            (self.cookies / name).write_text('{"cookies":[],"origins":[]}', encoding="utf-8")
+        with self.service.store.connect(write=True) as conn:
+            conn.executemany("INSERT INTO user_info VALUES (?,?,?,?,?)", [
+                (3, 1, "xhs.json", "小红书", 1), (4, 4, "ks.json", "快手", 1),
+                (5, 2, "channels.json", "视频号", 1), (6, 25, "wechat.json", "公众号", 1)])
+            for account_id, platform in ((3, "xiaohongshu"), (4, "kuaishou"), (5, "tencent"), (6, "wechat")):
+                bind_account(conn, account_id, platform, source="test-fixture")
+        self.article = self.service.update_article(self.article["id"], {"expected_revision": 1,
+            "cover_asset_id": asset["id"]})
+        targets = [{"platform": "zhihu", "account_id": 1}]
+        targets += [{"platform": platform, "account_id": account_id,
+                     "overrides": {"options": {"flatten_content": True}}}
+                    for platform, account_id in (("xiaohongshu", 3), ("kuaishou", 4), ("tencent", 5))]
+        targets.append({"platform": "wechat", "account_id": 6})
+        batch = self.publish(targets=targets, mode="preview")
+        self.assertEqual(len(batch["tasks"]), 5)
+        self.assertTrue(all(task["status"] == "queued" for task in batch["tasks"]))
+        with self.assertRaisesRegex(ArticleError, "平台|账号"):
+            self.service.account_file(5, "wechat")
+        with self.assertRaisesRegex(ArticleError, "平台|账号"):
+            self.service.account_file(6, "tencent")
+
+
+    def test_note_rich_format_error_does_not_block_other_targets(self):
+        """富文本未同意转换时立即记录该目标失败，保留原稿并继续其他目标。"""
+        with self.service.store.connect(write=True) as conn:
+            conn.execute("INSERT INTO user_info VALUES (3,1,'a.json','小红书测试账号',1)")
+        batch = self.publish(targets=[{"platform": "xiaohongshu", "account_id": 3},
+                                      {"platform": "zhihu", "account_id": 1}], mode="preview")
+        results = {task["platform"]: task for task in batch["tasks"]}
+        self.assertEqual(results["xiaohongshu"]["status"], "failed")
+        self.assertIn("纯文本", results["xiaohongshu"]["message"])
+        self.assertEqual(results["zhihu"]["status"], "queued")
+        self.assertIn("<strong>", self.service.get_article(self.article["id"])["content_html"])
+
+
+    def commerce_accounts(self):
+        platforms = {"jd": (3, 26), "xiaohongshu_merchant": (4, 27), "dongchedi": (5, 24), "taobao": (6, 28)}
+        rows = []
+        for platform, (account_id, kind) in platforms.items():
+            filename = f"独立-{platform}.json"
+            (self.cookies / filename).write_text('{"cookies":[],"origins":[]}', encoding="utf-8")
+            rows.append((account_id, kind, filename, f"隔离{platform}账号", 1))
+        with self.service.store.connect(write=True) as conn:
+            conn.executemany("INSERT INTO user_info VALUES (?,?,?,?,?)", rows)
+            for platform, (account_id, _) in platforms.items():
+                bind_account(conn, account_id, platform, source="test-fixture")
+
+
+    def test_four_more_platforms_share_batch_and_keep_required_overrides(self):
+        self.commerce_accounts()
+        asset = self.service.assets.save(image_bytes((800, 800)), "商品图.png")
+        horizontal = self.service.assets.save(image_bytes((640, 480), "blue"), "懂车横图.png")
+        vertical = self.service.assets.save(image_bytes((600, 800), "green"), "懂车竖图.png")
+        self.article = self.service.update_article(self.article["id"], {"expected_revision": 1,
+            "format": "html", "content": f'<h1>图文与文章同批次</h1><p>保留原始正文<img src="{asset["url"]}"></p>',
+            "cover_asset_id": asset["id"], "platform_options": {
+                "xiaohongshu_merchant": {"options": {"shop_name": "测试商家店铺", "flatten_content": True}},
+                "taobao": {"options": {"statement": "含AI生成内容", "flatten_content": True}},
+                "dongchedi": {"cover_asset_id": horizontal["id"], "options": {"vertical_cover_asset_id": vertical["id"]}}}})
+        targets = [
+            {"platform": "jd", "account_id": 3, "overrides": {"options": {"flatten_content": True}}},
+            {"platform": "xiaohongshu_merchant", "account_id": 4,
+             "overrides": {"options": {"product_id": "12345678"}}},
+            {"platform": "dongchedi", "account_id": 5},
+            {"platform": "taobao", "account_id": 6},
+        ]
+        batch = self.publish(targets=targets, mode="preview")
+        self.assertEqual(len(batch["tasks"]), 4)
+        for task in batch["tasks"]:
+            self.assertEqual(task["status"], "queued", task)
+        accounts = {account["id"]: account["platform"] for account in self.service.accounts()}
+        self.assertEqual([accounts[i] for i in (3, 4, 5, 6)], ["jd", "xiaohongshu_merchant", "dongchedi", "taobao"])
+        with self.service.store.connect() as conn:
+            snapshots = {row["platform"]: json.loads(row["snapshot_json"]) for row in conn.execute(
+                "SELECT platform,snapshot_json FROM article_publish_tasks WHERE batch_id=?", (batch["id"],))}
+        self.assertEqual(snapshots["xiaohongshu_merchant"]["options"],
+                         {"shop_name": "测试商家店铺", "product_id": "12345678", "flatten_content": True})
+        self.assertEqual(snapshots["taobao"]["options"]["statement"], "含AI生成内容")
+        with self.assertRaises(ArticleError):
+            self.service.account_file(4, "xiaohongshu")
+
+
+    def test_missing_commerce_requirements_fail_only_their_target(self):
+        self.commerce_accounts()
+        batch = self.publish(targets=[{"platform": "xiaohongshu_merchant", "account_id": 4},
+                                      {"platform": "taobao", "account_id": 6},
+                                      {"platform": "zhihu", "account_id": 1}], mode="preview")
+        results = {task["platform"]: task for task in batch["tasks"]}
+        for platform in ("xiaohongshu_merchant", "taobao"):
+            self.assertEqual(results[platform]["status"], "failed")
+            self.assertIn("必须", results[platform]["message"])
+        self.assertEqual(results["zhihu"]["status"], "queued")
+
+    def test_jd_note_and_jingdong_article_accounts_and_covers_do_not_cross(self):
+        """京东图文使用首图封面，京东长文章使用独立封面；相同门户也不能串账号。"""
+        self.add_new_platform_accounts()
+        self.commerce_accounts()
+        first = self.service.assets.save(image_bytes((800, 800), "white"), "图文首图.png")
+        article_cover = self.service.assets.save(image_bytes((700, 490), "blue"), "长文章独立封面.png")
+        self.article = self.service.create_article({
+            "title": "京东图文与长文章独立账号验证标题", "format": "html",
+            "content": f'<p>保留文章正文和首图<img src="{first["url"]}"></p>',
+            "cover_asset_id": first["id"], "platform_options": {
+                "jingdong": {"cover_asset_id": article_cover["id"]},
+                "jd": {"options": {"product_links": "https://item.jd.com/12345678.html"}}}})
+        batch = self.publish(mode="preview", targets=[
+            {"platform": "jd", "account_id": 3}, {"platform": "jingdong", "account_id": 18}])
+        for task in batch["tasks"]:
+            self.assertEqual(task["status"], "queued", task)
+        seen = set()
+        def runner(snapshot, cookie, assets, on_submit, directory):
+            platform = snapshot["platform"]
+            seen.add(platform)
+            if platform == "jd":
+                self.assertEqual(cookie.name, "独立-jd.json")
+                self.assertEqual(snapshot["cover_asset_id"], first["id"])
+                self.assertEqual(set(assets), {first["id"]})
+                self.assertEqual(snapshot["options"], {"product_links": "https://item.jd.com/12345678.html"})
+            else:
+                self.assertEqual(cookie.name, "jingdong.json")
+                self.assertEqual(snapshot["cover_asset_id"], article_cover["id"])
+                self.assertEqual(set(assets), {first["id"], article_cover["id"]})
+                self.assertEqual(snapshot["options"], {})
+            return {"status": "previewed", "message": "隔离校验两种京东内容类型"}
+        self.service.runner = runner
+        self.assertTrue(self.service.acquire())
+        while self.service.run_next():
+            pass
+        self.assertEqual(seen, {"jd", "jingdong"})
+        for task in self.service.get_batch(batch["id"])["tasks"]:
+            self.assertEqual(task["status"], "previewed", task)
+            self.assertFalse(task["submit_started"])
+        swapped = self.publish(key="京东账号交叉拒绝", mode="preview", targets=[
+            {"platform": "jd", "account_id": 18}, {"platform": "jingdong", "account_id": 3}])
+        for task in swapped["tasks"]:
+            self.assertEqual(task["status"], "failed", task)
+            self.assertIn("不匹配", task["message"])
+            self.assertFalse(task["submit_started"])
+
+    def test_legacy_type_13_requires_confirmation_and_preserves_existing_task_identity(self):
+        """旧编号不能猜成大鱼或京东；明确迁移后原 ID、会话和历史平台快照保持不变。"""
+        from utils.account_bindings import confirm_account_platform
+        account_file = self.cookies / "来源待确认.json"
+        original_cookie = b'{"cookies":[],"origins":[]}'
+        account_file.write_bytes(original_cookie)
+        with self.service.store.connect(write=True) as conn:
+            conn.execute("INSERT INTO user_info VALUES (?,?,?,?,?)", (13, 13, account_file.name, "旧账号", 1))
+        asset = self.service.assets.save(image_bytes((800, 800)), "迁移测试配图.png")
+        self.article = self.service.create_article({
+            "title": "旧账号所属平台确认测试", "format": "html",
+            "content": f'<p>完整原稿与配图<img src="{asset["url"]}"></p>', "cover_asset_id": asset["id"]})
+        before_account = next(account for account in self.service.accounts() if account["id"] == 13)
+        self.assertIsNone(before_account["platform"])
+        self.assertTrue(before_account["needs_confirmation"])
+        original = self.publish(mode="preview", targets=[
+            {"platform": "jd", "account_id": 13}, {"platform": "dayu", "account_id": 13}])
+        for task in original["tasks"]:
+            self.assertEqual(task["status"], "failed", task)
+            self.assertEqual(task["stage"], "validation")
+            self.assertIn("确认", task["message"])
+            self.assertFalse(task["submit_started"])
+            self.assertFalse(task["retry_allowed"])
+        with self.service.store.connect() as conn:
+            before = [tuple(row) for row in conn.execute(
+                "SELECT id,platform,account_id,snapshot_json FROM article_publish_tasks WHERE batch_id=? ORDER BY id", (original["id"],))]
+        confirmed = confirm_account_platform(self.base / "db.sqlite", 13, "jd", 13)
+        self.assertEqual((confirmed["account_id"], confirmed["platform"], confirmed["type"]), (13, "jd", 26))
+        self.assertTrue(Path(confirmed["backup_path"]).is_file())
+        self.assertEqual(account_file.read_bytes(), original_cookie)
+        after_account = next(account for account in self.service.accounts() if account["id"] == 13)
+        self.assertEqual(after_account["platform"], "jd")
+        self.assertFalse(after_account["needs_confirmation"])
+        with self.service.store.connect() as conn:
+            after = [tuple(row) for row in conn.execute(
+                "SELECT id,platform,account_id,snapshot_json FROM article_publish_tasks WHERE batch_id=? ORDER BY id", (original["id"],))]
+            self.assertEqual(tuple(conn.execute("SELECT id,type,filePath FROM user_info WHERE id=13").fetchone()),
+                             (13, 26, account_file.name))
+        self.assertEqual(after, before)
+        self.assertEqual(self.service.account_file(13, "jd"), account_file)
+        with self.assertRaisesRegex(ArticleError, "不匹配"):
+            self.service.account_file(13, "dayu")
+        batch = self.publish(key="确认所属平台后", mode="preview", targets=[
+            {"platform": "jd", "account_id": 13}, {"platform": "dayu", "account_id": 13}])
+        tasks = {task["platform"]: task for task in batch["tasks"]}
+        self.assertEqual(tasks["jd"]["status"], "queued", tasks["jd"])
+        self.assertEqual(tasks["dayu"]["status"], "failed", tasks["dayu"])
+        self.assertIn("不匹配", tasks["dayu"]["message"])
+
+
+    def test_taobao_image_size_is_validated_before_queueing(self):
+        self.commerce_accounts()
+        asset = self.service.assets.save(image_bytes(), "尺寸不足.png")
+        self.article = self.service.update_article(self.article["id"], {"expected_revision": 1,
+            "content": "平台正文", "format": "text", "cover_asset_id": asset["id"]})
+        batch = self.publish(targets=[{"platform": "taobao", "account_id": 6,
+                                      "overrides": {"options": {"statement": "内容无需标注"}}},
+                                     {"platform": "jd", "account_id": 3}], mode="preview")
+        results = {task["platform"]: task for task in batch["tasks"]}
+        self.assertEqual(results["taobao"]["status"], "failed")
+        self.assertIn("720", results["taobao"]["message"])
+        self.assertEqual(results["jd"]["status"], "queued")
+
 
 
 if __name__ == "__main__":

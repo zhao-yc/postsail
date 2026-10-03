@@ -17,7 +17,7 @@ class ArticleError(ValueError):
         self.status = status
 
 
-from .platforms import PLATFORMS
+from .platforms import PLATFORMS, NOTE_PLATFORMS
 
 # 这里只记录可复查的真实验收，不能由适配器存在或模拟测试推导。
 LIVE_VERIFICATION = {
@@ -230,7 +230,7 @@ def validate_platform_cover(platform: str, cover: dict, first_body_asset: dict |
 def capabilities() -> list[dict]:
     """公开能力中明确区分实现与真实平台验收状态。"""
     return [{"platform": platform, **rules, "scheduled": False,
-             "formats": ["headings", "bold", "lists", "quotes",
+             "formats": ["text", "link_text", "images"] if platform in NOTE_PLATFORMS else ["headings", "bold", "lists", "quotes",
                          "link_text" if platform in {"douyin", "chejiahao"} else "links", "images", "table", "code"],
              "live_verified": LIVE_VERIFICATION.get(platform, {}).get("published", False),
              "verification": {stage: LIVE_VERIFICATION.get(platform, {}).get(stage, False)
@@ -238,7 +238,9 @@ def capabilities() -> list[dict]:
              "verification_scope": LIVE_VERIFICATION.get(platform, {}).get("scope", rules.get("verification_scope", "缺少真实账号验收")),
              "verification_date": LIVE_VERIFICATION.get(platform, {}).get("date", ""),
              "verification_url": LIVE_VERIFICATION.get(platform, {}).get("url", ""),
-             "permission_check": "进入平台编辑器后检查账号文章权限",
-             "format_fallbacks": {"table": "image", "code": "image",
-                                  **({"links": "text_url_opt_in"} if platform in {"douyin", "chejiahao"} else {})}}
+             "permission_check": "进入平台编辑器后检查账号内容发布权限",
+             "format_fallbacks": ({"rich_text": "plain_text_opt_in", "links": "text_url",
+                                   "inline_images": "ordered_album"} if platform in NOTE_PLATFORMS else
+                                  {"table": "image", "code": "image",
+                                  **({"links": "text_url_opt_in"} if platform in {"douyin", "chejiahao"} else {})})}
             for platform, rules in PLATFORMS.items()]

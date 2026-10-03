@@ -19,12 +19,141 @@ def cookie_state(domain=".weibo.com"):
     return {"cookies": [{"name": "测试凭据", "value": "测试值", "domain": domain, "path": "/"}], "origins": []}
 
 
+ADDITIONAL_ARTICLE_ACCOUNTS = (
+    (26, "jd", "京东图文", "dr.jd.com"),
+    (27, "xiaohongshu_merchant", "小红书商家号", "ark.xiaohongshu.com"),
+    (28, "taobao", "淘宝光合", "creator.guanghe.taobao.com"),
+)
+
 class ArticleAccountTests(unittest.TestCase):
+    def test_wechat_import_requires_public_account_domain(self):
+        for domain in ('mp.weixin.qq.com', '.mp.weixin.qq.com'):
+            validate_imported_cookie(25, cookie_state(domain))
+        for domain in ('.qq.com', '.weixin.qq.com', 'channels.weixin.qq.com', 'om.qq.com', 'mp.weixin.qq.com.attacker.example'):
+            with self.subTest(domain=domain), self.assertRaises(ValueError):
+                validate_imported_cookie(25, cookie_state(domain))
+
+    def test_additional_platform_cookie_scopes_reject_sibling_sites(self):
+        shared_domains = {26: '.jd.com', 27: '.xiaohongshu.com', 24: '.dcdapp.com', 28: '.taobao.com'}
+        siblings = {26: 'item.jd.com', 27: 'creator.xiaohongshu.com', 24: 'www.dcdapp.com', 28: 'item.taobao.com'}
+        for kind, _, _, host in ADDITIONAL_ARTICLE_ACCOUNTS:
+            with self.subTest(kind=kind):
+                validate_imported_cookie(kind, cookie_state(host))
+                validate_imported_cookie(kind, cookie_state(shared_domains[kind]))
+                for foreign in (siblings[kind], host + '.example.com', '.com', '.qq.com'):
+                    with self.subTest(foreign=foreign), self.assertRaises(ValueError):
+                        validate_imported_cookie(kind, cookie_state(foreign))
+
+    def test_additional_platform_auth_and_login_dispatch_remain_independent(self):
+        queue = MagicMock()
+        for kind, platform, label, _ in ADDITIONAL_ARTICLE_ACCOUNTS:
+            with self.subTest(platform=platform):
+                with patch.object(auth, 'cookie_auth_article_account', new=AsyncMock(return_value=True)) as check:
+                    self.assertTrue(asyncio.run(auth.check_cookie(kind, '测试.json')))
+                    self.assertEqual(check.call_args.args[0], platform)
+                with patch.object(login, 'article_account_cookie_gen', new=AsyncMock(return_value=True)) as generate:
+                    self.assertTrue(asyncio.run(getattr(login, platform + '_cookie_gen')(label, queue)))
+                    generate.assert_awaited_once_with(label, queue, platform, kind)
+
+    def new_platform_probe_page(self, platform):
+        """只构造当前平台的明确后台标识；没有域名推断登录的后门。"""
+        page = MagicMock(url=auth.ARTICLE_LOGIN_PROBES[platform]['url'])
+        page.evaluate = AsyncMock(return_value=True)
+        page.wait_for_function = AsyncMock()
+        marker = MagicMock()
+        marker.first.wait_for = AsyncMock()
+        marker.first.inner_text = AsyncMock(return_value='已认证测试账号')
+        marker.count = AsyncMock(return_value=1)
+        challenge = MagicMock()
+        challenge.count = AsyncMock(return_value=0)
+        page.locator.side_effect = lambda selector: challenge if 'iframe[src*="captcha"]' in selector else marker
+        return (page, marker, challenge)
+
+    def test_additional_probes_require_positive_backend_identity(self):
+        for _, platform, _, _ in ADDITIONAL_ARTICLE_ACCOUNTS:
+            with self.subTest(platform=platform):
+                page, marker, challenge = self.new_platform_probe_page(platform)
+                self.assertTrue(asyncio.run(auth.article_account_is_logged_in(page, platform)))
+                marker.first.click.assert_not_called()
+                if platform == 'jd':
+                    page.wait_for_function.assert_awaited_once_with(auth.ARTICLE_LOGIN_PROBES[platform]['identity_script'], timeout=10000)
+                    page.wait_for_function.side_effect = RuntimeError('缺少达人资料')
+                else:
+                    marker.first.wait_for.side_effect = RuntimeError('缺少后台标识')
+                self.assertFalse(asyncio.run(auth.article_account_is_logged_in(page, platform)))
+                page.wait_for_function.side_effect = None
+                marker.first.wait_for.side_effect = None
+                challenge.count.return_value = 1
+                self.assertFalse(asyncio.run(auth.article_account_is_logged_in(page, platform)))
+
+    def test_additional_probes_reject_login_pages_sibling_hosts_and_foreign_redirects(self):
+        for _, platform, _, host in ADDITIONAL_ARTICLE_ACCOUNTS:
+            page, _, _ = self.new_platform_probe_page(platform)
+            original_url = page.url
+            for url in (f'https://{host}/login', f'https://{host}/#/login', f'https://{host}.example.com/', original_url.replace('https://', 'http://')):
+                with self.subTest(platform=platform, url=url):
+                    page.url = url
+                    self.assertFalse(asyncio.run(auth.article_account_is_logged_in(page, platform)))
+        page, _, _ = self.new_platform_probe_page('xiaohongshu_merchant')
+        for host in ('creator.xiaohongshu.com', 'customer.xiaohongshu.com'):
+            page.url = f'https://{host}/ark/home'
+            self.assertFalse(asyncio.run(auth.article_account_is_logged_in(page, 'xiaohongshu_merchant')))
+
+    def test_merchant_and_taobao_require_unique_nonempty_account_names(self):
+        for platform in ('xiaohongshu_merchant', 'taobao'):
+            page, marker, _ = self.new_platform_probe_page(platform)
+            for value in ('', '  \n  ', '账号正常\n逛逛号\n账号管理' if platform == 'taobao' else ' '):
+                marker.first.inner_text.return_value = value
+                with self.subTest(platform=platform, value=value):
+                    self.assertFalse(asyncio.run(auth.article_account_is_logged_in(page, platform)))
+            marker.first.inner_text.return_value = '已认证测试账号'
+            marker.count.return_value = 2
+            self.assertFalse(asyncio.run(auth.article_account_is_logged_in(page, platform)))
+
+    def test_wechat_login_wrapper_preserves_distinct_account_type(self):
+        queue = MagicMock()
+        with patch.object(login, 'article_account_cookie_gen', new=AsyncMock(return_value=True)) as generate:
+            self.assertTrue(asyncio.run(login.wechat_cookie_gen('公众号账号', queue)))
+        generate.assert_awaited_once_with('公众号账号', queue, 'wechat', 25)
+
+    def test_wechat_probe_requires_authenticated_backend_and_visible_navigation(self):
+        page = MagicMock()
+        page.locator.return_value.first.wait_for = AsyncMock()
+        for url in ('https://mp.weixin.qq.com/', 'https://mp.weixin.qq.com/cgi-bin/home', 'https://mp.weixin.qq.com/cgi-bin/home?token=0', 'https://mp.weixin.qq.com/cgi-bin/home?token=not-a-token', 'https://mp.weixin.qq.com/cgi-bin/login?token=123', 'https://channels.weixin.qq.com/cgi-bin/home?token=123', 'https://mp.weixin.qq.com.attacker.example/cgi-bin/home?token=123'):
+            page.url = url
+            with self.subTest(url=url):
+                self.assertFalse(asyncio.run(auth.article_account_is_logged_in(page, 'wechat')))
+        page.url = 'https://mp.weixin.qq.com/cgi-bin/home?t=home/index&token=123'
+        self.assertTrue(asyncio.run(auth.article_account_is_logged_in(page, 'wechat')))
+        page.locator.return_value.first.click.assert_not_called()
+        page.locator.return_value.first.wait_for = AsyncMock(side_effect=RuntimeError('未找到后台导航'))
+        self.assertFalse(asyncio.run(auth.article_account_is_logged_in(page, 'wechat')))
+
+    def test_wechat_cookie_probe_reads_home_and_preserves_credentials(self):
+        page = MagicMock()
+        page.goto = AsyncMock()
+        page.url = 'https://mp.weixin.qq.com/cgi-bin/home?t=home/index&token=123'
+        page.locator.return_value.first.wait_for = AsyncMock()
+        context = SimpleNamespace(new_page=AsyncMock(return_value=page))
+        browser = SimpleNamespace(new_context=AsyncMock(return_value=context), close=AsyncMock())
+        manager = AsyncMock()
+        manager.__aenter__.return_value = SimpleNamespace(chromium=SimpleNamespace(launch=AsyncMock(return_value=browser)))
+        with TemporaryDirectory() as folder:
+            path = Path(folder) / '公众号.json'
+            path.write_text(json.dumps(cookie_state('mp.weixin.qq.com')), encoding='utf-8')
+            before = path.read_bytes()
+            with patch.object(auth, 'async_playwright', return_value=manager):
+                self.assertTrue(asyncio.run(auth.cookie_auth_article_account('wechat', path)))
+            self.assertEqual(path.read_bytes(), before)
+        page.goto.assert_awaited_once_with('https://mp.weixin.qq.com/', wait_until='domcontentloaded', timeout=60000)
+        page.locator.return_value.first.click.assert_not_called()
+        browser.close.assert_awaited_once()
+
     def test_account_types_keep_video_channel_distinct(self):
         self.assertEqual(resolve_account_type("tencent"), 2)
         self.assertEqual(resolve_account_type("qiehao"), 11)
         self.assertEqual(resolve_account_type("weibo"), 10)
-        self.assertEqual(ARTICLE_ACCOUNT_TYPES, {3, 5, 6, 7, 8, 9, 10, 11, *range(12, 25)})
+        self.assertEqual(ARTICLE_ACCOUNT_TYPES, set(range(1, 29)))
         with self.assertRaises(ValueError):
             resolve_account_type(True)
 
@@ -34,7 +163,9 @@ class ArticleAccountTests(unittest.TestCase):
                      ("acfun", "AcFun", 15), ("kuaichuan", "快传号", 16), ("xueqiu", "雪球号", 17),
                      ("jingdong", "京东", 18), ("douban", "豆瓣", 19), ("csdn", "CSDN", 20),
                      ("jianshu", "简书", 21), ("chejiahao", "车家号", 22),
-                     ("yiche", "易车号", 23), ("dongchedi", "懂车号", 24)]
+                     ("yiche", "易车号", 23), ("dongchedi", "懂车号", 24),
+                     ("wechat", "微信公众号", 25), ("jd", "京东图文", 26),
+                     ("xiaohongshu_merchant", "小红书商家号", 27), ("taobao", "淘宝光合", 28)]
         for name, label, kind in platforms:
             for value in (name, label, kind, str(kind)):
                 with self.subTest(value=value):
@@ -152,6 +283,58 @@ class ArticleAccountTests(unittest.TestCase):
 
 
 class CookieImportRoutesTests(unittest.TestCase):
+    def test_wechat_import_and_login_dispatch_use_type_25(self):
+        with patch.object(self.backend, 'check_cookie', new=AsyncMock(return_value=True)) as check:
+            response = self.upload('/importCookie', platform='wechat', state=cookie_state('mp.weixin.qq.com'))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json['data']['type'], 25)
+        self.assertEqual(check.call_args.args[0], 25)
+        with sqlite3.connect(self.base / 'db' / 'database.db') as conn:
+            self.assertEqual(conn.execute('SELECT type,status FROM user_info WHERE id=2').fetchone(), (25, 1))
+        queue = MagicMock()
+        with patch.object(self.backend, 'article_account_cookie_gen', new=AsyncMock()) as generate:
+            self.backend.run_async_function('25', '公众号账号', queue)
+        generate.assert_awaited_once_with('公众号账号', queue, 'wechat', 25)
+
+    def test_wechat_foreign_import_is_rejected_before_browser_auth(self):
+        with patch.object(self.backend, 'check_cookie', new=AsyncMock()) as check:
+            response = self.upload('/importCookie', platform='wechat', state=cookie_state('channels.weixin.qq.com'))
+        self.assertEqual(response.status_code, 400)
+        check.assert_not_called()
+        self.assertEqual(list((self.base / 'cookiesFile').iterdir()), [self.existing])
+
+    def test_additional_imports_create_independent_types_and_dispatch_login(self):
+        queue = MagicMock()
+        for kind, platform, label, host in ADDITIONAL_ARTICLE_ACCOUNTS:
+            with self.subTest(platform=platform):
+                with patch.object(self.backend, 'check_cookie', new=AsyncMock(return_value=True)) as check:
+                    response = self.upload('/importCookie', platform=platform, state=cookie_state(host))
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json['data']['type'], kind)
+                self.assertEqual(check.call_args.args[0], kind)
+                with sqlite3.connect(self.base / 'db' / 'database.db') as conn:
+                    self.assertEqual(conn.execute('SELECT type,status FROM user_info ORDER BY id DESC LIMIT 1').fetchone(), (kind, 1))
+                with patch.object(self.backend, 'article_account_cookie_gen', new=AsyncMock()) as generate:
+                    self.backend.run_async_function(str(kind), label, queue)
+                generate.assert_awaited_once_with(label, queue, platform, kind)
+
+    def test_merchant_shared_cookie_without_backend_identity_is_not_imported(self):
+        with patch.object(self.backend, 'check_cookie', new=AsyncMock(return_value=False)) as check:
+            response = self.upload('/importCookie', platform='xiaohongshu_merchant', state=cookie_state('.xiaohongshu.com'))
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(check.call_args.args[0], 27)
+        self.assertEqual(list((self.base / 'cookiesFile').iterdir()), [self.existing])
+        with sqlite3.connect(self.base / 'db' / 'database.db') as conn:
+            self.assertEqual(conn.execute('SELECT count(*) FROM user_info').fetchone()[0], 1)
+
+    def test_additional_article_accounts_reject_video_single_and_batch(self):
+        with patch.dict(self.backend.app.extensions, {'legacy_article_publish': MagicMock()}):
+            for kind, _, _, _ in ADDITIONAL_ARTICLE_ACCOUNTS:
+                for route, payload in (('/postVideo', {'type': kind, 'contentType': 'video'}), ('/postVideoBatch', [{'type': kind, 'contentType': 'video'}])):
+                    with self.subTest(kind=kind, route=route):
+                        self.assertEqual(self.client.post(route, json=payload).status_code, 400)
+            self.backend.app.extensions['legacy_article_publish'].assert_not_called()
+
     def setUp(self):
         """所有账号数据放临时数据库，真实用户目录不会写入。"""
         import sau_backend
@@ -285,16 +468,16 @@ class CookieImportRoutesTests(unittest.TestCase):
     def test_legacy_articles_only_use_declared_capabilities(self):
         for kind in ARTICLE_ACCOUNT_TYPES:
             self.assertTrue(self.backend._is_article_request({"type": str(kind), "contentType": "article"}))
-        for kind in (1, 2, 4):
+        for kind in (999,):
             self.assertFalse(self.backend._is_article_request({"type": kind, "contentType": "article"}))
-        for kind in (3, 5, 6, 7):
+        for kind in (1, 2, 3, 4, 5, 6, 7):
             self.assertFalse(self.backend._is_article_request({"type": kind, "contentType": "video"}))
         self.assertNotIn("weibo", self.backend.SUPPORTED_STATS_PLATFORMS)
         self.assertNotIn("qiehao", self.backend.SUPPORTED_STATS_PLATFORMS)
 
     def test_unsupported_article_never_runs_video_dispatch(self):
         with patch.dict(self.backend.app.extensions, {"legacy_article_publish": MagicMock()}):
-            for route, data in (("/postVideo", {"type": 2, "contentType": "article", "fileList": ["视频.mp4"]}),
+            for route, data in (("/postVideo", {"type": 999, "contentType": "article", "fileList": ["视频.mp4"]}),
                                 ("/postVideo", {"type": 10, "contentType": "video"}),
                                 ("/postVideoBatch", [{"type": 11, "contentType": "video"}])):
                 response = self.client.post(route, json=data)

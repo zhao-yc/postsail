@@ -11,6 +11,8 @@ from queue import Queue
 from flask_cors import CORS
 from myUtils.auth import check_cookie
 from utils.platform_accounts import ACCOUNT_PLATFORMS, ARTICLE_ACCOUNT_TYPES, ARTICLE_ONLY_ACCOUNT_TYPES, ACCOUNT_UNAVAILABLE_REASONS, resolve_account_type, validate_imported_cookie, validate_bilibili_cookie_replacement
+from utils.account_bindings import (AccountBindingError, account_identity, require_account_platform,
+                                    bind_account, confirm_account_platform)
 from utils.articles.model import ArticleError
 from utils.articles.routes import register_article_routes
 from utils.interactions.routes import register_interaction_routes
@@ -207,7 +209,7 @@ def upload_save():
         # 保存文件
         file.save(filepath)
 
-        with sqlite3.connect(Path(BASE_DIR / "db" / "database.db")) as conn:
+        with sqlite3.connect(_db_path()) as conn:
             cursor = conn.cursor()
             cursor.execute('''
                                 INSERT INTO file_records (filename, filesize, file_path)
@@ -237,7 +239,7 @@ def upload_save():
 def get_all_files():
     try:
         # 使用 with 自动管理数据库连接
-        with sqlite3.connect(Path(BASE_DIR / "db" / "database.db")) as conn:
+        with sqlite3.connect(_db_path()) as conn:
             conn.row_factory = sqlite3.Row  # 允许通过列名访问结果
             cursor = conn.cursor()
 
@@ -277,13 +279,14 @@ def get_all_files():
 def getAccounts():
     """快速获取所有账号信息，不进行cookie验证"""
     try:
-        with sqlite3.connect(Path(BASE_DIR / "db" / "database.db")) as conn:
+        with sqlite3.connect(_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute('''
             SELECT * FROM user_info''')
             rows = cursor.fetchall()
             rows_list = [list(row) for row in rows]
+            identities = {str(row["id"]): account_identity(conn, row) for row in rows}
 
             print("\n📋 当前数据表内容（快速获取）：")
             for row in rows:
@@ -293,7 +296,7 @@ def getAccounts():
                 {
                     "code": 200,
                     "msg": None,
-                    "data": rows_list
+                    "data": rows_list, "accountIdentities": identities
                 }), 200
     except Exception as e:
         print(f"获取账号列表时出错: {str(e)}")
@@ -317,7 +320,7 @@ async def getValidAccounts():
                 "data": None
             }), 400
 
-    with sqlite3.connect(Path(BASE_DIR / "db" / "database.db")) as conn:
+    with sqlite3.connect(_db_path()) as conn:
         cursor = conn.cursor()
         if platform_type is not None:
             cursor.execute('SELECT * FROM user_info WHERE type = ?', (platform_type,))
@@ -325,12 +328,13 @@ async def getValidAccounts():
             cursor.execute('SELECT * FROM user_info')
         rows = cursor.fetchall()
         rows_list = [list(row) for row in rows]
+        identities = {str(row[0]): account_identity(conn, row) for row in rows}
         scope = f"type={platform_type}" if platform_type is not None else "all"
         print(f"\n📋 校验账号 ({scope})，共 {len(rows_list)} 条：")
         for row in rows:
             print(row)
         for row in rows_list:
-            if row[1] in ACCOUNT_UNAVAILABLE_REASONS:
+            if row[1] in ACCOUNT_UNAVAILABLE_REASONS or identities[str(row[0])]["needs_confirmation"]:
                 continue
             flag = await check_cookie(row[1],row[2])
             new_status = 1 if flag else 0
@@ -346,7 +350,7 @@ async def getValidAccounts():
                         {
                             "code": 200,
                             "msg": None,
-                            "data": rows_list
+                            "data": rows_list, "accountIdentities": identities
                         }),200
 
 @app.route('/deleteFile', methods=['GET'])
@@ -362,7 +366,7 @@ def delete_file():
 
     try:
         # 获取数据库连接
-        with sqlite3.connect(Path(BASE_DIR / "db" / "database.db")) as conn:
+        with sqlite3.connect(_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 
@@ -426,7 +430,7 @@ def delete_account():
 
     try:
         # 获取数据库连接
-        with sqlite3.connect(Path(BASE_DIR / "db" / "database.db")) as conn:
+        with sqlite3.connect(_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 
@@ -455,6 +459,10 @@ def delete_account():
 
             # 删除数据库记录
             cursor.execute("DELETE FROM user_info WHERE id = ?", (account_id,))
+            if cursor.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'account_platform_bindings'"
+            ).fetchone():
+                cursor.execute("DELETE FROM account_platform_bindings WHERE account_id = ?", (account_id,))
             conn.commit()
 
         return jsonify({
@@ -480,6 +488,14 @@ def login():
     id = request.args.get('id')
     try:
         type = str(resolve_account_type(type))
+        expected_platform = ACCOUNT_PLATFORMS[int(type)]
+        if request.args.get("platform") not in (None, expected_platform):
+            raise ValueError("账号平台名称与编号不一致，请刷新页面")
+        account_id = request.args.get("accountId")
+        if account_id is not None:
+            with sqlite3.connect(_db_path()) as conn:
+                row = conn.execute("SELECT id,type,filePath,userName,status FROM user_info WHERE id=?", (account_id,)).fetchone()
+                require_account_platform(conn, row, expected_platform)
         if int(type) in ACCOUNT_UNAVAILABLE_REASONS:
             raise ValueError(ACCOUNT_UNAVAILABLE_REASONS[int(type)])
     except ValueError as exc:
@@ -531,6 +547,19 @@ def _validate_publish_capability(data):
         raise ArticleError("该账号平台当前仅支持文章发布")
     if kind in ACCOUNT_UNAVAILABLE_REASONS:
         raise ArticleError(ACCOUNT_UNAVAILABLE_REASONS[kind])
+    if kind >= 12 and data.get("accountList"):
+        try:
+            with sqlite3.connect(_db_path()) as conn:
+                for value in data["accountList"]:
+                    if type(value) is int:
+                        rows = conn.execute("SELECT id,type,filePath,userName,status FROM user_info WHERE id=?", (value,)).fetchall()
+                    else:
+                        rows = conn.execute("SELECT id,type,filePath,userName,status FROM user_info WHERE filePath=?", (str(value),)).fetchall()
+                    if len(rows) != 1:
+                        raise AccountBindingError("账号不存在或会话文件对应多个账号")
+                    require_account_platform(conn, rows[0], ACCOUNT_PLATFORMS[kind])
+        except (AccountBindingError, sqlite3.Error) as exc:
+            raise ArticleError(str(exc)) from exc
 
 
 def _submit_legacy_article(data):
@@ -813,40 +842,36 @@ def postVideo():
 
 @app.route('/updateUserinfo', methods=['POST'])
 def updateUserinfo():
-    # 获取JSON数据
-    data = request.get_json()
-
-    # 从JSON数据中提取 type 和 userName
-    user_id = data.get('id')
-    type = data.get('type')
-    userName = data.get('userName')
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"code": 400, "msg": "请求必须为 JSON 对象", "data": None}), 400
     try:
-        # 获取数据库连接
-        with sqlite3.connect(Path(BASE_DIR / "db" / "database.db")) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
+        name = data.get("userName")
+        if not isinstance(name, str) or not name.strip() or len(name) > 100:
+            raise ValueError("账号名称不能为空且不能超过 100 字")
+        with sqlite3.connect(_db_path()) as conn:
+            row = conn.execute("SELECT type FROM user_info WHERE id=?", (data.get("id"),)).fetchone()
+            if row is None:
+                return jsonify({"code": 404, "msg": "账号不存在", "data": None}), 404
+            if data.get("type") is not None and resolve_account_type(data["type"]) != row[0]:
+                raise ValueError("普通编辑不能更换账号平台，请使用旧账号平台确认入口")
+            conn.execute("UPDATE user_info SET userName=? WHERE id=?", (name.strip(), data.get("id")))
+        return jsonify({"code": 200, "msg": "account update successfully", "data": None})
+    except ValueError as exc:
+        return jsonify({"code": 400, "msg": str(exc), "data": None}), 400
 
-            # 更新数据库记录
-            cursor.execute('''
-                           UPDATE user_info
-                           SET type     = ?,
-                               userName = ?
-                           WHERE id = ?;
-                           ''', (type, userName, user_id))
-            conn.commit()
 
-        return jsonify({
-            "code": 200,
-            "msg": "account update successfully",
-            "data": None
-        }), 200
+@app.route('/confirmAccountPlatform', methods=['POST'])
+def confirm_legacy_account_platform():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"code": 400, "msg": "请求必须为 JSON 对象", "data": None}), 400
+    try:
+        result = confirm_account_platform(_db_path(), data.get("id"), data.get("platform"), data.get("expectedType"))
+        return jsonify({"code": 200, "msg": "所属平台已确认，原会话和发布历史已保留；迁移前数据库已备份", "data": result})
+    except AccountBindingError as exc:
+        return jsonify({"code": 409, "msg": str(exc), "data": None}), 409
 
-    except Exception as e:
-        return jsonify({
-            "code": 500,
-            "msg": str("update failed!"),
-            "data": None
-        }), 500
 
 @app.route('/postVideoBatch', methods=['POST'])
 def postVideoBatch():
@@ -1043,7 +1068,7 @@ def _import_account_cookie(create_new=False):
             raise ValueError(ACCOUNT_UNAVAILABLE_REASONS[account_type])
         root = Path(BASE_DIR / "cookiesFile").resolve()
         root.mkdir(parents=True, exist_ok=True)
-        database = Path(BASE_DIR / "db" / "database.db")
+        database = _db_path()
         if create_new:
             name = (request.form.get("name") or "").strip()
             if not name or len(name) > 100:
@@ -1055,9 +1080,11 @@ def _import_account_cookie(create_new=False):
                 raise ValueError("账号 ID 无效")
             with sqlite3.connect(database) as conn:
                 conn.row_factory = sqlite3.Row
-                row = conn.execute("SELECT type,filePath,userName FROM user_info WHERE id=?", (account_id,)).fetchone()
+                row = conn.execute("SELECT id,type,filePath,userName,status FROM user_info WHERE id=?", (account_id,)).fetchone()
             if row is None:
                 return jsonify({"code": 404, "msg": "账号不存在", "data": None}), 404
+            with sqlite3.connect(database) as conn:
+                require_account_platform(conn, row, ACCOUNT_PLATFORMS[account_type])
             if row["type"] != account_type:
                 raise ValueError("上传平台与账号平台不一致")
             destination = (root / row["filePath"]).resolve()
@@ -1083,11 +1110,17 @@ def _import_account_cookie(create_new=False):
             raise ValueError("Cookie 登录状态校验未通过，请重新登录；浏览器依赖不可用时请检查配置")
         destination.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(database) as conn:
+            conn.execute("BEGIN IMMEDIATE")
             if create_new:
                 cursor = conn.execute("INSERT INTO user_info(type,filePath,userName,status) VALUES(?,?,?,1)",
                                       (account_type, destination.name, name))
                 account_id = cursor.lastrowid
+                bind_account(conn, account_id, ACCOUNT_PLATFORMS[account_type])
             else:
+                current = conn.execute("SELECT id,type,filePath,userName,status FROM user_info WHERE id=?", (account_id,)).fetchone()
+                require_account_platform(conn, current, ACCOUNT_PLATFORMS[account_type])
+                if current[2] != row["filePath"]:
+                    raise ValueError("账号会话在校验期间发生变化，请重试")
                 conn.execute("UPDATE user_info SET status=1 WHERE id=?", (account_id,))
             # 平台校验可能耗时，落盘前再次保护期间更新的 biliup 凭据。
             if account_type == 6 and not create_new:
