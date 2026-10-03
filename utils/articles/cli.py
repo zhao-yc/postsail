@@ -371,7 +371,7 @@ def _publish_targets(args) -> list[dict]:
     seen = set()
     for target in targets:
         if not isinstance(target, dict) or target.get("platform") not in ARTICLE_PLATFORMS:
-            raise ArticleCliError("每个目标需指定 baijiahao、zhihu、toutiao 或 sohu 平台")
+            raise ArticleCliError("每个目标需指定支持的文章平台：" + "、".join(ARTICLE_PLATFORMS))
         if not isinstance(target.get("account_id"), int) or isinstance(target["account_id"], bool) or target["account_id"] <= 0:
             raise ArticleCliError("每个目标的 account_id 必须是正整数")
         if not isinstance(target.get("overrides", {}), dict):

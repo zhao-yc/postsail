@@ -1,4 +1,5 @@
 """网页、API、CLI 共用的文章平台定义；不依赖浏览器或 Web 运行时。"""
+from .extended_platforms import EXTENDED_PLATFORMS, EXTENDED_CONTENT_KINDS, EXTENDED_OPTION_FIELDS
 
 PLATFORMS = {
     "baijiahao": {"label": "百家号", "account_type": 5, "title_min": 2, "title_max": 64,
@@ -37,7 +38,10 @@ PLATFORMS.update({
                "cover_min_width": 0, "cover_min_height": 0, "statement_options": []},
 })
 
-CONTENT_KINDS = {"douyin": "原生文章", "bilibili": "专栏／长图文", "weibo": "头条文章"}
+PLATFORMS.update(EXTENDED_PLATFORMS)
+
+CONTENT_KINDS = {"douyin": "原生文章", "bilibili": "专栏／长图文", "weibo": "头条文章",
+                 **EXTENDED_CONTENT_KINDS}
 OPTION_FIELDS = {
     "douyin": [{"name": "summary", "label": "文章摘要", "type": "textarea", "max_length": 30},
                {"name": "links_as_text", "label": "将不支持的超链接转为文字和完整网址", "type": "boolean"}],
@@ -51,6 +55,9 @@ OPTION_FIELDS = {
 }
 for name, rules in PLATFORMS.items():
     rules["content_kind"] = CONTENT_KINDS.get(name, "文章")
+    if name in EXTENDED_OPTION_FIELDS:
+        rules["option_fields"] = [dict(field) for field in EXTENDED_OPTION_FIELDS[name]]
+        continue
     fields = list(OPTION_FIELDS.get(name, []))
     if name == "baijiahao":
         fields.append({"name": "ai_generated", "label": "采用 AI 生成内容", "type": "boolean"})
@@ -64,5 +71,6 @@ for name, rules in PLATFORMS.items():
 
 # 列表顺序和用户选择器一致；既有 API 标识及账号类型保持兼容。
 PLATFORMS = {name: PLATFORMS[name] for name in (
-    "douyin", "bilibili", "baijiahao", "toutiao", "weibo", "zhihu", "qiehao", "sohu")}
+    "douyin", "bilibili", "baijiahao", "toutiao", "weibo", "zhihu", "qiehao", "sohu",
+    *EXTENDED_PLATFORMS)}
 ARTICLE_PLATFORMS = tuple(PLATFORMS)

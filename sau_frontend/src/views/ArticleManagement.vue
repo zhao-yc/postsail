@@ -76,24 +76,25 @@
         <p class="distribution-caption">选择平台账号；留空的覆盖项沿用文章内容。</p>
         <div v-for="platform in capabilities" :key="platform.platform" class="platform-section">
           <div class="platform-heading"><span class="platform-mark">{{ platform.label.slice(0, 1) }}</span><h3>{{ platform.label }}</h3></div>
-          <p class="capability-note">{{ platform.content_kind || '文章' }} · {{ platform.live_verified ? '已完成基础流程验证' : '真实账号待验证' }}</p>
+          <p class="capability-note">{{ platform.content_kind || '文章' }} · {{ platform.available === false ? '待接入' : platform.live_verified ? '已完成基础流程验证' : '真实账号待验证' }}</p>
           <p class="capability-note">{{ verificationHint(platform) }}</p>
           <p v-if="platform.verification_scope" class="capability-note">验证范围：{{ platform.verification_scope }}</p>
-          <p class="capability-note">{{ titleHint(platform) }} · {{ platform.cover_required ? '必须有封面' : '封面可选' }}{{ coverHint(platform) }}</p>
+          <p class="capability-note">{{ titleHint(platform) }} · {{ coverDescription(platform) }}{{ coverHint(platform) }}</p>
           <p v-if="platform.reason || platform.limitations" class="capability-note">{{ platform.reason || platform.limitations }}</p>
           <p v-if="platform.permission_check" class="capability-note">{{ platform.permission_check }}</p>
           <div v-if="accountsFor(platform.platform).length" class="account-options">
             <div v-for="account in accountsFor(platform.platform)" :key="account.id" class="account-option">
-              <el-checkbox :model-value="selectedAccountIds.includes(account.id)" @change="toggleAccount(account, $event)">{{ account.user_name }}</el-checkbox>
+              <el-checkbox :disabled="platform.available === false" :model-value="selectedAccountIds.includes(account.id)" @change="toggleAccount(account, $event)">{{ account.user_name }}</el-checkbox>
               <span :class="['account-health', { invalid: !accountIsValid(account) }]">{{ accountIsValid(account) ? '已登录' : '需校验登录' }}</span>
             </div>
           </div>
-          <p v-else class="empty-account">暂无账号，<router-link to="/account-management">前往添加</router-link></p>
+          <p v-else-if="platform.available !== false" class="empty-account">暂无账号，<router-link to="/account-management">前往添加</router-link></p>
           <details v-for="account in selectedFor(platform.platform)" :key="account.id" class="target-overrides">
             <summary>{{ account.user_name }} · 个性化设置</summary>
             <label>平台标题</label><el-input v-model="targetConfigs[account.id].title" :placeholder="form.title || '沿用文章标题'" @input="markDirty" />
             <small>{{ titleHint(platform) }}</small>
-            <label>平台封面</label>
+            <template v-if="platform.cover_supported !== false">
+            <label>{{ platform.cover_label || '平台封面' }}</label>
             <div class="override-cover">
               <img v-if="targetConfigs[account.id].cover_asset_id" :src="assetUrl(targetConfigs[account.id].cover_asset_id)" alt="平台专用封面" />
               <el-upload :auto-upload="false" :show-file-list="false" accept="image/jpeg,image/png,image/webp" :on-change="(file) => uploadTargetCover(file.raw, account.id)">
@@ -101,12 +102,17 @@
               </el-upload>
               <el-button v-if="targetConfigs[account.id].cover_asset_id" text size="small" @click="targetConfigs[account.id].cover_asset_id = null; markDirty()">沿用默认</el-button>
             </div>
-            <small>{{ platform.cover_required ? '必须有封面' : '封面可选' }}{{ coverHint(platform) }}</small>
+            <small>{{ coverDescription(platform) }}{{ coverHint(platform) }}</small>
+            </template>
+            <small v-else>此平台不设置独立封面，默认封面不会应用到该平台；正文图片正常保留。</small>
+            <template v-if="platform.tags_supported !== false">
             <label>话题覆盖</label>
             <el-select v-model="targetConfigs[account.id].tags_mode" @change="markDirty">
               <el-option label="沿用默认话题" value="inherit" /><el-option label="单独设置话题" value="custom" /><el-option label="清空话题" value="clear" />
             </el-select>
             <el-input v-if="targetConfigs[account.id].tags_mode === 'custom'" v-model="targetConfigs[account.id].tags_text" placeholder="用逗号分隔；留空表示清空" @input="markDirty" />
+            </template>
+            <small v-else>此平台不设置独立话题，默认话题不会应用到该平台。</small>
             <template v-for="field in optionFields(platform)" :key="field.name">
               <label>{{ field.label }}{{ field.required ? '（必填）' : '' }}</label>
               <el-select :model-value="optionMode(account.id, field.name)" @change="setOptionMode(account.id, field, $event)">
@@ -117,9 +123,21 @@
                 <el-select v-else-if="field.type === 'select'" v-model="targetConfigs[account.id].options[field.name]" :placeholder="field.placeholder || '请选择'" clearable @change="markDirty">
                   <el-option v-for="option in field.options || []" :key="statementValue(option)" :label="statementLabel(option)" :value="statementValue(option)" />
                 </el-select>
+                <div v-else-if="field.type === 'asset'" class="override-cover option-cover">
+                  <img v-if="targetConfigs[account.id].options[field.name]" :src="assetUrl(targetConfigs[account.id].options[field.name])" :alt="field.label" />
+                  <el-upload :auto-upload="false" accept="image/jpeg,image/png" :show-file-list="false" :on-change="(file) => uploadOptionAsset(file.raw, account.id, field)">
+                    <el-button size="small" :loading="uploading">上传{{ field.label }}</el-button>
+                  </el-upload>
+                  <small v-if="field.placeholder">{{ field.placeholder }}</small>
+                </div>
                 <el-input v-else v-model="targetConfigs[account.id].options[field.name]" :type="field.type === 'textarea' ? 'textarea' : 'text'" :placeholder="field.placeholder" :maxlength="field.max_length" :show-word-limit="!!field.max_length" @input="markDirty" />
               </template>
-              <small v-else-if="optionMode(account.id, field.name) === 'inherit'">当前平台设置：{{ inheritedOption(account.platform, field.name) }}</small>
+              <template v-else-if="optionMode(account.id, field.name) === 'inherit'">
+                <small>当前平台设置：{{ inheritedOption(account.platform, field.name, field.type) }}</small>
+                <div v-if="field.type === 'asset' && form.platform_options[account.platform]?.options?.[field.name]" class="override-cover option-cover">
+                  <img :src="assetUrl(form.platform_options[account.platform].options[field.name])" :alt="field.label" />
+                </div>
+              </template>
             </template>
           </details>
         </div>
@@ -247,6 +265,7 @@ const editor = useEditor({
 })
 const formatTools = [
   { label: '正文段落', text: '正文', active: 'paragraph', run: () => editor.value.chain().focus().setParagraph().run() },
+  { label: '一级标题', text: 'H1', active: 'heading', attrs: { level: 1 }, run: () => editor.value.chain().focus().toggleHeading({ level: 1 }).run() },
   { label: '二级标题', text: 'H2', active: 'heading', attrs: { level: 2 }, run: () => editor.value.chain().focus().toggleHeading({ level: 2 }).run() },
   { label: '三级标题', text: 'H3', active: 'heading', attrs: { level: 3 }, run: () => editor.value.chain().focus().toggleHeading({ level: 3 }).run() },
   { label: '加粗', text: '粗体', active: 'bold', run: () => editor.value.chain().focus().toggleBold().run() },
@@ -287,8 +306,9 @@ function setOptionMode(id, field, mode) {
   if (mode === 'custom' && config.options[field.name] == null) config.options[field.name] = field.type === 'boolean' ? false : ''
   markDirty()
 }
-function inheritedOption(platform, name) {
+function inheritedOption(platform, name, type) {
   const value = form.platform_options[platform]?.options?.[name]
+  if (type === 'asset') return value ? '已上传封面' : '未设置'
   return value == null || value === '' ? '平台默认' : typeof value === 'boolean' ? (value ? '是' : '否') : value
 }
 // 未知配置一并保留，能力版本升级后再次保存不会丢失原配置。
@@ -309,8 +329,17 @@ function verificationHint(platform) {
   const verification = platform.verification || {}
   return [['preview', '预览'], ['submitted', '受理'], ['published', '公开发表']].map(([key, label]) => `${label}：${verification[key] ? '已验证' : '待验证'}`).join(' · ')
 }
-function titleHint(platform) { return `标题 ${platform.title_min || 1}–${platform.title_max || '不限'} 字` }
+function titleHint(platform) {
+  if (platform.title_weighted_limits) return `标题 ${platform.title_weighted_limits[0]}–${platform.title_weighted_limits[1]} 字（英文字符按半字计）`
+  const limit = platform.title_limit_confirmed === false ? '标题按平台页面限制校验，原稿最多 300 字' : `标题 ${platform.title_min || 1}–${platform.title_max || '不限'} 字`
+  return limit + (platform.title_min_cjk ? `，至少 ${platform.title_min_cjk} 个汉字` : '')
+}
+function coverDescription(platform) {
+  return platform.cover_supported === false ? '不设置独立封面' : platform.cover_required ? '必须有封面' : '封面可选'
+}
 function coverHint(platform) {
+  if (platform.cover_supported === false) return ''
+  if (platform.cover_hint) return `，${platform.cover_hint}`
   const size = platform.cover_max_bytes ? `，最大 ${Math.round(platform.cover_max_bytes / 1024 / 1024)} MB` : ''
   const dimensions = platform.cover_min_width && platform.cover_min_height ? `，需大于 ${platform.cover_min_width} × ${platform.cover_min_height}` : ''
   return size + dimensions
@@ -340,11 +369,15 @@ function isArticleLink(value) {
 
 // 账号首次勾选沿用平台默认设置；每个账号之后可独立覆盖。
 function toggleAccount(account, selected) {
+  const platform = capabilities.value.find((item) => item.platform === account.platform)
+  if (selected && platform?.available === false) return
   if (selected) {
     selectedAccountIds.value = [...new Set([...selectedAccountIds.value, account.id])]
     if (!targetConfigs[account.id]) {
       const defaults = form.platform_options[account.platform] || {}
       targetConfigs[account.id] = { title: defaults.title || '', cover_asset_id: defaults.cover_asset_id || null, tags_text: (defaults.tags || []).join('，'), tags_mode: Array.isArray(defaults.tags) ? (defaults.tags.length ? 'custom' : 'clear') : 'inherit', options: { ...(defaults.options || {}) }, option_modes: {} }
+      if (platform?.cover_supported === false) targetConfigs[account.id].cover_asset_id = null
+      if (platform?.tags_supported === false) targetConfigs[account.id].tags_mode = 'clear'
     }
   } else selectedAccountIds.value = selectedAccountIds.value.filter((id) => id !== account.id)
 }
@@ -455,6 +488,16 @@ async function uploadTargetCover(file, accountId) {
   catch { /* 平台原有覆盖设置保持不变。 */ }
   finally { finishUpload() }
 }
+async function uploadOptionAsset(file, accountId, field) {
+  if (!file) return
+  startUpload()
+  try {
+    const response = await articlesApi.uploadAsset(file)
+    targetConfigs[accountId].options[field.name] = response.data.id
+    markDirty()
+  } catch { /* 保留原素材，上传失败由请求层提示。 */ }
+  finally { finishUpload() }
+}
 // 图片由后端存储后才插入，正文不依赖用户电脑的临时文件路径。
 async function insertImageFile(file) {
   if (!file) return
@@ -520,7 +563,8 @@ async function submitPublication() {
       const account = accounts.value.find((item) => item.id === id)
       const config = targetConfigs[id]
       const options = resolvedOptions(account, config)
-      const overrides = { title: config.title.trim() || form.title, cover_asset_id: config.cover_asset_id || form.cover_asset_id || null, options }
+      const platform = capabilities.value.find((item) => item.platform === account.platform)
+      const overrides = { title: config.title.trim() || form.title, cover_asset_id: platform?.cover_supported === false ? null : config.cover_asset_id || form.cover_asset_id || null, options }
       // 沿用时不发送 tags；显式空数组让用户可以清除文章默认话题。
       if (config.tags_mode !== 'inherit') overrides.tags = config.tags_mode === 'clear' ? [] : parseTags(config.tags_text)
       return { platform: account.platform, account_id: id, overrides }
@@ -672,6 +716,8 @@ h1 { font-family: 'Songti SC', 'Noto Serif CJK SC', serif; font-size: 30px; font
 .target-overrides :deep(.el-select) { width: 100%; }
 .override-cover { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
 .override-cover img { width: 56px; height: 36px; object-fit: cover; }
+.option-cover img { width: 54px; height: 72px; object-fit: contain; }
+.option-cover small { flex-basis: 100%; }
 .publish-controls { padding-top: 18px; border-top: 1px solid var(--line); }
 .publish-controls :deep(.el-switch__label) { font-size: 12px; }
 .publish-button { width: 100%; margin: 16px 0 9px; background: var(--accent); border-color: var(--accent); }

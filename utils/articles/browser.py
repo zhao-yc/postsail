@@ -236,21 +236,23 @@ async def prepare_document(render_page, content_html: str, assets: dict,
 
 async def prepare_and_paste_document(page, editor, render_page, content_html: str,
                                      assets: dict, evidence_dir: Path, font: str,
-                                     on_prepared=None, links_as_text: bool = False) -> PreparedDocument:
+                                     on_prepared=None, links_as_text: bool = False,
+                                     paste_handler=None) -> PreparedDocument:
     """优先原生表格/代码，仅正文或格式核验失败时改为 PNG 版本重填。"""
     document = await prepare_document(render_page, content_html, assets, evidence_dir, font,
                                       preserve_blocks=True, links_as_text=links_as_text)
     if on_prepared:
         on_prepared(document)
+    paste = paste_handler or paste_rich_html
     try:
-        await paste_rich_html(page, editor, document)
+        await paste(page, editor, document)
     except PreparationError:
         # 此处尚未开始正文图片上传，更没有正式提交，重新填写不会重复发文。
         document = await prepare_document(render_page, content_html, assets, evidence_dir, font,
                                           preserve_blocks=False, links_as_text=links_as_text)
         if on_prepared:
             on_prepared(document)
-        await paste_rich_html(page, editor, document)
+        await paste(page, editor, document)
     return document
 
 
@@ -340,6 +342,10 @@ async def body_sequence(editor, platform: str | None = None, *, include_images: 
             if(node.nodeType!==Node.ELEMENT_NODE)return;
             // 抖音图片节点内的编辑按钮不是正文，不屏蔽其它按钮或警告文字。
             if(options.platform==='douyin' && node.matches('.node-image button[title="编辑图片"]')) return;
+            // 京东官方 Braft 图片悬停时显示删除图标；它是图片工具条而非正文。
+            if(options.platform==='jingdong' && node.matches('.bf-media > .bf-image > .bf-media-toolbar')) return;
+            // 懂车官方图片的字数提示不是图注；真实图注及上传警告继续参与全文比较。
+            if(options.platform==='dongchedi' && node.matches('.pgc-image .pgc-img-caption-tip')) return;
             if(node.tagName==='IMG'){
                 if(options.includeImages)out+='OMNIPOSTIMAGE'+String(index++).padStart(4,'0')+'END';return;
             }
@@ -421,6 +427,18 @@ IMAGE_HOST_SUFFIXES = {
     "zhihu": ("zhimg.com", "zhihu.com"),
     "toutiao": ("byteimg.com", "toutiaoimg.com", "toutiao.com", "pstatp.com", "ibytedtos.com", "bytecdn.cn"),
     "sohu": ("itc.cn", "sohu.com", "sohucs.com", "s3img.com"),
+    "yidian": ("yidianzixun.com", "go2yd.com"),
+    "dayu": ("uc.cn", "uczzd.cn", "dayu.com"),
+    "netease": ("126.net", "127.net", "163.com"),
+    "acfun": ("acfun.cn", "aixifan.com", "acfunimg.com"),
+    "kuaichuan": ("qhimg.com", "qhimgs.com", "360kuai.com"),
+    "xueqiu": ("xueqiu.com", "imedao.com"),
+    "douban": ("douban.com", "doubanio.com"),
+    "csdn": ("csdn.net", "csdnimg.cn"),
+    "jianshu": ("jianshu.com", "jianshu.io", "jianshu-images.jianshu.io"),
+    "jingdong": ("360buyimg.com",),
+    "chejiahao": ("autoimg.cn", "autohome.com.cn"),
+    "dongchedi": ("dcarimg.com", "byteimg.com"),
 }
 
 
@@ -460,21 +478,28 @@ async def install_preview_guard(page) -> None:
 
 _PREVIEW_GUARD = """(() => {
     if(window.__omnipostPreviewGuard)return;window.__omnipostPreviewGuard=true;
-    const isPublish=el=>el && /^(?:(?:立即|确认|确定|定时)?(?:发布|投稿)(?:文章|图文)?|提交审核|提交发布)$/.test((el.innerText||el.textContent||'').trim());
+    const controls='button,[role=button],a,input[type=submit],input[type=button]';
+    const isPublish=el=>el &&
+        /^(?:(?:立即|确认|确定|定时)?(?:发布|投稿|发表)(?:文章|图文|日记)?|提交审核|提交发布)$/.test(
+            (el.getAttribute('aria-label')||(el.tagName==='INPUT'?el.value:el.innerText||el.textContent)||'').trim());
     const guard=event=>{let el=event.target;while(el&&el!==document.body){
         if(isPublish(el)){event.preventDefault();event.stopImmediatePropagation();return;}
         el=el.parentElement;}};
     document.addEventListener('click',guard,true);
+    document.addEventListener('submit',event=>{
+        if(isPublish(event.submitter)||(!event.submitter&&Array.from(event.target.querySelectorAll(controls)).some(isPublish))){
+            event.preventDefault();event.stopImmediatePropagation();}},true);
     document.addEventListener('keydown',event=>{
         if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){
             event.preventDefault();event.stopImmediatePropagation();}},true);
-    const disable=()=>document.querySelectorAll('button,[role=button],a').forEach(el=>{
+    const disable=()=>document.querySelectorAll(controls).forEach(el=>{
         if(isPublish(el)){el.setAttribute('aria-disabled','true');el.style.pointerEvents='none';
-            if(el.tagName==='BUTTON')el.disabled=true;}});
+            if(el.tagName==='BUTTON'||el.tagName==='INPUT')el.disabled=true;}});
     // 初始化脚本可能早于根节点创建；事件拦截立即生效，观察器在 DOM 可用后安装。
     const observe=()=>{
         if(!document.documentElement)return;
-        new MutationObserver(disable).observe(document.documentElement,{subtree:true,childList:true});
+        new MutationObserver(disable).observe(document.documentElement,{subtree:true,childList:true,
+            characterData:true,attributes:true,attributeFilter:['value','aria-label']});
         disable();
     };
     if(document.documentElement)observe();
@@ -546,6 +571,13 @@ async def read_result_evidence(page, platform: str, expected_title: str = "") ->
         "baijiahao": r"^https://baijiahao\.baidu\.com/s\?[^#]*\bid=(\d+)",
         "toutiao": r"^https://(?:www\.)?toutiao\.com/article/(\d+)(?:[/?#]|$)",
         "sohu": r"^https://(?:www\.)?sohu\.com/a/(\d+_\d+)(?:[/?#]|$)",
+        "yidian": r"^https://(?:www\.)?yidianzixun\.com/article/([A-Za-z0-9_-]+)(?:[/?#]|$)",
+        "netease": r"^https://(?:www\.)?163\.com/dy/article/([A-Za-z0-9]+)\.html(?:[?#]|$)",
+        "acfun": r"^https://(?:www\.)?acfun\.cn/a/ac(\d+)(?:[/?#]|$)",
+        "xueqiu": r"^https://(?:www\.)?xueqiu\.com/\d+/(\d+)(?:[/?#]|$)",
+        "douban": r"^https://www\.douban\.com/note/(\d+)/(?:[?#]|$)",
+        "csdn": r"^https://blog\.csdn\.net/[^/?#]+/article/details/(\d+)(?:[/?#]|$)",
+        "jianshu": r"^https://www\.jianshu\.com/p/([a-fA-F0-9]+)(?:[/?#]|$)",
     }
     public = re.search(patterns.get(platform, r"(?!)"), page.url or "")
     if public and expected_title and normalize_text(expected_title) in normalize_text(body):

@@ -15,6 +15,7 @@ import requests
 
 import sau_cli
 from utils.articles.cli import ArticleApiClient, ArticleCliError, prepare_content
+from utils.articles.platforms import PLATFORMS
 
 
 def response(data=None, *, code=200, status=200, msg="处理完成"):
@@ -313,6 +314,103 @@ class ArticleCliApiIntegrationTests(unittest.TestCase):
             code = sau_cli.main(["article", "--json", *argv])
         return code, json.loads(stdout.getvalue())
 
+    def test_new_platform_selectors_and_import_defaults_share_real_api_contract(self):
+        """十三个新增平台经 CLI 导入、选账号和预览，沿用真实 API 与数据库校验。"""
+        from PIL import Image
+        from utils.articles.service import ArticleService
+
+        platforms = {"yidian": 12, "dayu": 13, "netease": 14, "acfun": 15, "kuaichuan": 16,
+                     "xueqiu": 17, "jingdong": 18, "douban": 19, "csdn": 20, "jianshu": 21,
+                     "chejiahao": 22, "yiche": 23, "dongchedi": 24}
+        rows = []
+        for platform, kind in platforms.items():
+            (self.base / "cookiesFile" / f"{platform}.json").write_text('{"cookies":[],"origins":[]}', encoding="utf-8")
+            rows.append((kind, kind, f"{platform}.json", f"隔离{platform}账号", 1))
+        with sqlite3.connect(self.database) as connection:
+            connection.executemany("INSERT INTO user_info VALUES (?,?,?,?,?)", rows)
+
+        article_file = self.base / "新平台原稿.md"
+        article_file.write_text("# 保留格式\n\n新平台文章的完整正文。", encoding="utf-8")
+        cover = self.base / "封面.png"
+        Image.new("RGB", (700, 490), "white").save(cover)
+        horizontal = self.base / "汽车横封面.png"
+        vertical = self.base / "汽车竖封面.png"
+        yiche_horizontal = self.base / "易车横封面.png"
+        Image.new("RGB", (640, 480), "red").save(horizontal)
+        Image.new("RGB", (600, 800), "green").save(vertical)
+        Image.new("RGB", (720, 480), "red").save(yiche_horizontal)
+        code, uploaded_horizontal = self.command("asset", "--file", str(horizontal))
+        self.assertEqual(code, 0, uploaded_horizontal)
+        code, uploaded_vertical = self.command("asset", "--file", str(vertical))
+        self.assertEqual(code, 0, uploaded_vertical)
+        code, uploaded_yiche = self.command("asset", "--file", str(yiche_horizontal))
+        self.assertEqual(code, 0, uploaded_yiche)
+        defaults = {platform: {"title": f"{PLATFORMS[platform]['label']}平台默认独立文章自动化测试标题", "options": {}}
+                    for platform in platforms}
+        defaults["acfun"]["options"] = {"category": "生活", "original": True}
+        defaults["csdn"]["options"] = {"summary": "文章的完整摘要", "create_type": "原创"}
+        defaults["jingdong"]["options"] = {"category": "生活/居家/好物"}
+        defaults["chejiahao"]["options"] = {"original": False, "first_publish": False, "agree_upload_terms": True}
+        defaults["yiche"]["options"] = {"declaration": "内容无需标注", "allow_forward": False, "allow_abstract": False}
+        for platform in ("chejiahao", "yiche", "dongchedi"):
+            defaults[platform]["options"]["vertical_cover_asset_id"] = uploaded_vertical["data"]["id"]
+            defaults[platform]["cover_asset_id"] = uploaded_horizontal["data"]["id"]
+        defaults["yiche"]["cover_asset_id"] = uploaded_yiche["data"]["id"]
+        options_file = self.base / "平台默认项.json"
+        options_file.write_text(json.dumps(defaults, ensure_ascii=False), encoding="utf-8")
+        code, imported = self.command("import", "--file", str(article_file), "--title", "新平台默认原稿文章标题",
+                                      "--cover", str(cover), "--tags", "技术", "--platform-options", str(options_file))
+        self.assertEqual(code, 0, imported)
+        article = imported["data"]
+        self.assertEqual(article["platform_options"], defaults)
+        batches = {}
+        for platform, kind in platforms.items():
+            with self.subTest(platform=platform):
+                code, accounts = self.command("accounts", "--platform", platform)
+                self.assertEqual(code, 0, accounts)
+                self.assertEqual([(item["id"], item["platform"]) for item in accounts["data"]], [(kind, platform)])
+                self.assertNotIn("filePath", json.dumps(accounts))
+                args = ("publish", article["id"], "--platform", platform, "--account-id", str(kind),
+                        "--preview", "--idempotency-key", f"preview-{platform}")
+                code, result = self.command(*args)
+                self.assertEqual(code, 0, result)
+                task = result["data"]["tasks"][0]
+                self.assertEqual((task["platform"], task["account_id"], task["mode"]), (platform, kind, "preview"))
+                self.assertEqual(task["status"], "queued", task)
+                batches[platform] = result["data"]["id"]
+                code, repeated = self.command(*args)
+                self.assertEqual(code, 0, repeated)
+                self.assertEqual(repeated["data"]["id"], batches[platform])
+
+        observed = set()
+        def runner(snapshot, cookie_file, assets, on_submit, evidence_dir):
+            platform = snapshot["platform"]
+            observed.add(platform)
+            self.assertEqual(snapshot["title"], defaults[platform]["title"])
+            self.assertEqual(snapshot["options"], defaults[platform]["options"])
+            self.assertEqual(snapshot["content_html"], article["content_html"])
+            self.assertEqual(cookie_file.name, f"{platform}.json")
+            if platform in ("chejiahao", "yiche", "dongchedi"):
+                vertical_id = uploaded_vertical["data"]["id"]
+                self.assertIn(vertical_id, assets)
+                self.assertEqual(Path(assets[vertical_id]["path"]).read_bytes(), vertical.read_bytes())
+            return {"status": "previewed", "message": "仅模拟浏览器边界的预览"}
+
+        service = ArticleService(self.database, self.base / "articleData" / "assets", self.base / "cookiesFile",
+                                 self.base / "articleData" / "evidence", runner=runner)
+        self.assertTrue(service.acquire())
+        while service.run_next():
+            pass
+        self.assertEqual(observed, set(platforms))
+        self.assertEqual(len(service.batches()), 13)
+        for platform, batch_id in batches.items():
+            code, status = self.command("status", batch_id)
+            self.assertEqual(code, 0, status)
+            task = status["data"]["tasks"][0]
+            self.assertEqual(task["status"], "previewed", task)
+            self.assertFalse(task["submit_started"])
+            self.assertEqual(task["platform_url"], "")
+
     def test_real_api_import_update_preview_publish_and_resolve(self):
         from PIL import Image
         from utils.articles.service import ArticleService
@@ -337,7 +435,7 @@ class ArticleCliApiIntegrationTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in accounts["data"]], [1])
         self.assertNotIn("filePath", str(accounts))
         code, caps = self.command("capabilities")
-        self.assertEqual(len(caps["data"]["platforms"]), 8)
+        self.assertEqual(len(caps["data"]["platforms"]), 21)
         self.assertEqual({item["platform"] for item in caps["data"]["platforms"] if item["live_verified"]},
                          {"douyin"})
 

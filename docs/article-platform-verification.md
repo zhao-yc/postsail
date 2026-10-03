@@ -1,10 +1,10 @@
 # 原生文章平台验证记录
 
-本记录区分代码实现、真实预览、平台接收回执和正式发表。当前八个平台已注册到同一文章任务服务，抖音完整真实预览已通过；其正式发布已取得官方文章创建成功回执及内容 ID，公开文章已现场核实。代码能力与真实验收分别记录，使用者仍需在自己的账号上验证实际流程。
+本记录区分平台登记、代码实现、真实预览、平台接收回执和正式发表。当前 21 个文章平台均具备执行器并已开放执行；车家号、易车号、懂车号依据当前官方文章页面完成专属适配。京东已核实官方原生文章入口及内容类型，并完成专属适配。抖音完整真实预览已通过；其正式发布已取得官方文章创建成功回执及内容 ID，公开文章已现场核实。其余 20 个平台未完成真实账号验收，使用者仍需在自己的账号上验证实际流程。
 
-## 本轮真实验证状态
+## 已记录的真实验证状态
 
-记录日期：2026-10-01。仅有抖音验收账号；公开原稿为官网文章编号 927，包含三张正文图片。原稿和素材先导入 PostSail，官网发布流程仍独立。本次抖音验收限定为一篇文章的标题、完整正文、三张正文图及顺序、平台 CDN 地址和高清封面；原生话题、声明、其他账号和其他操作系统未验收。公开地址来自平台管理页分享字段和浏览器真实重定向，并非根据内容 ID 推测。
+抖音真实验收日期：2026-10-01；汽车平台官方依据更新于 2026-10-03。仅有抖音验收账号；公开原稿为官网文章编号 927，包含三张正文图片。原稿和素材先导入 PostSail，官网发布流程仍独立。本次抖音验收限定为一篇文章的标题、完整正文、三张正文图及顺序、平台 CDN 地址和高清封面；原生话题、声明、其他账号和其他操作系统未验收。公开地址来自平台管理页分享字段和浏览器真实重定向，并非根据内容 ID 推测。
 
 | 平台 | 原生内容 | 编辑器与素材准备 | `previewed` | `submitted` | `published` |
 | --- | --- | --- | --- | --- | --- |
@@ -16,6 +16,21 @@
 | 知乎 | 文章 | 缺少真实验收账号 | 未验证 | 未执行 | 未执行 |
 | 企鹅号 | 文章 | 缺少真实验收账号 | 未验证 | 未执行 | 未执行 |
 | 搜狐号 | 文章 | 缺少真实验收账号 | 未验证 | 未执行 | 未执行 |
+| 一点号 | 文章 | 公开契约与受控页面验证；缺少真实验收账号 | 未验证 | 未执行 | 未执行 |
+| 大鱼号 | 文章 | 公开契约与受控页面验证；缺少真实验收账号 | 未验证 | 未执行 | 未执行 |
+| 网易号 | 文章 | 公开契约与受控页面验证；缺少真实验收账号 | 未验证 | 未执行 | 未执行 |
+| AcFun | 文章投稿 | 原生文章链接与控件需运行时核实；缺少真实验收账号 | 未验证 | 未执行 | 未执行 |
+| 快传号 | 文章 | 公开契约与受控页面验证；缺少真实验收账号 | 未验证 | 未执行 | 未执行 |
+| 雪球号 | 长文章 | 公开契约与受控页面验证；缺少真实验收账号 | 未验证 | 未执行 | 未执行 |
+| 京东 | 原生文章（`style=0`） | 官方源码与真实编辑器组件的离线 Chromium 回读；缺少真实验收账号 | 未验证 | 未执行 | 未执行 |
+| 豆瓣 | 日记文章 | 公开契约与受控页面验证；缺少真实验收账号 | 未验证 | 未执行 | 未执行 |
+| CSDN | 博客文章 | 公开契约与受控页面验证；缺少真实验收账号 | 未验证 | 未执行 | 未执行 |
+| 简书 | 文章 | 公开契约与受控页面验证；缺少真实验收账号 | 未验证 | 未执行 | 未执行 |
+| 车家号 | 原生长文 | 官方正文与双封面组件离线验证、受控浏览器回归；缺少真实验收账号 | 未验证 | 未执行 | 未执行 |
+| 易车号 | 文章 | 官方双封面编辑组件离线验证、受控浏览器回归；缺少真实验收账号 | 未验证 | 未执行 | 未执行 |
+| 懂车号 | 文章 | 官方正文、图片与封面组件离线验证、受控浏览器回归；缺少真实验收账号 | 未验证 | 未执行 | 未执行 |
+
+此前接入的十个平台及新增三个汽车平台的 `live_verified` 和 `verification.preview/submitted/published` 均为 `false`。受控页面只证明实现面对固定页面结构时符合预期，不能证明当前平台页面、真实账号权限或正式发布可用。京东和三个汽车平台使用公开官方组件补充了离线回读验证，仍未执行真实账号登录、图片上传或正式发布。代码启用不计作真实平台验收。
 
 抖音真实页面已核实标题上限30字、摘要上限30字、正文上限20000字、正文图片上限30张、原生话题最多5个，以及封面宽高均至少500px。初始封面为322×520px，平台明确拒绝低分辨率；不能把触发文件选择器算作封面设置成功。
 
@@ -47,12 +62,115 @@ API 返回 `verification.preview/submitted/published` 分别表示真实验收�
 | 微博 | [头条文章编辑器](https://card.weibo.com/article/v3/editor)；[微博长文官方 PC 教程](https://www.weibo.com/ttarticle/p/show?id=2309404803154729631808)；[公开维护者浏览器脚本](https://github.com/jimliu/baoyu-skills/blob/main/skills/baoyu-post-to-weibo/scripts/weibo-article.ts) | 「下一步」与最终短微博「发布」分开处理；原生话题没有确切控件证据时要求人工处理 |
 | 企鹅号 | [文章创作入口](https://om.qq.com/main/creation/article)；[近期维护者源码](https://github.com/liuxucai/qq-publish-skill/blob/master/scripts/publish_isob.js)；[维护者流程记录](https://github.com/liuxucai/qq-publish-skill/blob/master/references/workflow.md)；[文章适配器参考](https://github.com/yjmm10/MediaSync/blob/master/packages/core/src/adapters/platforms/qiehao.ts) | 新编辑器标题 / ProseMirror 优先，旧 UEditor 兼容；封面、分类、摘要、自主声明和标签须实际控件命中与读回；缺账号尚未验收 |
 | 百家号、知乎、今日头条、搜狐号 | 现有独立文章 uploader，经统一准备与结果读取流程接入 | 缺账号尚未验收；声明、封面与话题失败会阻止提交 |
+| 一点号 | [文章编辑器](https://mp.yidianzixun.com/#/Writing/articleEditor)；MediaSync 的 `yidian.ts`、MultiPost 的 `yidianzixun.ts`；蚁小二文章契约 | 标题 5–64 字；封面必填；不支持独立标签；公开脚本中的占位封面选择器未作为成功依据 |
+| 大鱼号 | [文章编辑器](https://mp.dayu.com/dashboard/article/write)；MediaSync 的 `dayu.ts`、MultiPost 的 `dayuhao.ts` | 标题上限50字、正文 HTML 上限50000字符；进入实际 UEditor iframe 读写正文 |
+| 网易号 | [文章编辑器](https://mp.163.com/subscribe_v4/index.html#/article-publish)；MediaSync、MultiPost 的 `netease.ts` | 新旧标题提示不同，须读取实际控件限制；Draft.js 正文；封面必填 |
+| AcFun | [会员中心](https://www.acfun.cn/member/)；蚁小二 `article/acfun.md` | 从当前页面读取唯一的「文章投稿」链接，严格核实文章路径；不猜视频入口；分类和封面必填，最多一个话题 |
+| 快传号 | [原生文章编辑器](https://kuaichuan.360kuai.com/#/console/publish/article)；MultiPost 的 `kuaichuanhao.ts`；蚁小二文章契约 | 360 快传号；封面必填；标题限制以实际控件为准 |
+| 雪球号 | [长文章编辑器](https://mp.xueqiu.com/writeV2)；MultiPost、Wechatsync 的 `xueqiu.ts` | 标题 9–100 字；ProseMirror 正文；可见范围与声明须原生控件读回 |
+| 京东 | [原生文章编辑器](https://dr.jd.com/n/publish-article.html)；官方文章、分类与 Braft 组件；蚁小二正式网页文章契约 | `style=0`；每任务 1 张独立封面；可选精确三级分类；核验原生表单序列化内容，真实账号尚未验收 |
+| 豆瓣 | [日记编辑器](https://www.douban.com/note/create)；MultiPost、Wechatsync 的 `douban.ts` | 日记文章；无独立封面；日记预览与最终发表动作分开处理 |
+| CSDN | [博客富文本编辑器](https://mp.csdn.net/mp_blog/creation/editor)；SyncCaster 的 `csdn.ts`；蚁小二文章契约 | 摘要、创作类型、标签和封面必填；打开发布设置期间阻止未经核实的写请求，核验后才进入正式提交边界 |
+| 简书 | [写作页面](https://www.jianshu.com/writer)；SyncCaster、MediaSync 的 `jianshu.ts` | 先新建独立文章并确认新稿 ID，再切换可核实的富文本正文；无独立封面和标签，不覆盖旧稿 |
+| 车家号 | [当前原生长文入口](https://creator.autohome.com.cn/web/publish/long)；官方 Lexical、封面与提交组件 | 独立双封面；链接须显式转换；上传协议必须明确同意；真实账号尚未验收 |
+| 易车号 | [原生文章入口](https://mp.yiche.com/article/index-new)；官方 Nuxt 文章、Quill 与双封面组件 | 以原生素材键核验 Base64 预览；六种声明与转载来源；真实账号尚未验收 |
+| 懂车号 | [原生文章入口](https://mp.dcdapp.com/profile_v2/publish/article)；官方 Syl 正文、双封面与提交组件 | 正文标题只支持 H1；独立双封面和素材 URI 读回；真实账号尚未验收 |
 
 引用公开源码用于确认入口与控件，并不代表当前用户已经登录、该账号具有文章权限或本项目已经发布成功。公开脚本中以 DOM 修改、盲选第一个按钮或管理页跳转认定成功的做法，不作为本项目结果判定依据。
+
+## 新增平台的研究依据与验证边界
+
+按用户要求的「文章发布」类别查阅蚁小二公开契约，再交叉核对开源编辑器实现；PostSail 直接使用目标平台浏览器页面，不调用蚁小二的账号或发布服务。参考版本固定如下，便于复查当时的依据：
+
+| 公开资料 | 固定版本 | 本轮使用范围 |
+| --- | --- | --- |
+| [蚁小二文章平台契约](https://github.com/yixiaoer888/yixiaoer-skill/tree/a2722c6095f57abf2e345dca637bdded44fa34df/skills/yixiaoer/references/platforms/article) | `a2722c6` | 一点、大鱼、网易、AcFun、快传、雪球、豆瓣、CSDN、简书，以及车家号、易车号的文章类型、必填项及已公开限制 |
+| [MediaSync 平台适配器](https://github.com/yjmm10/MediaSync/tree/77ec95860fd1b0898459a6f401220e34cf80f31e/packages/core/src/adapters/platforms) | `77ec958` | 一点、大鱼、网易的编辑入口，以及部分平台的只读身份信息和写作页 |
+| [MultiPost 文章脚本](https://github.com/leaper-one/MultiPost-Extension/tree/6269ab4ada1cf661a3624b2b9f496bb032a391d5/src/sync/article) | `6269ab4` | 一点、大鱼、网易、快传、雪球、豆瓣的编辑器与控件候选；车家号和懂车号的入口候选，未据此启用汽车平台 |
+| [Wechatsync 平台适配器](https://github.com/wechatsync/Wechatsync/tree/a98e42865387285afcc027c61836488748f3b30f/packages/core/src/adapters/platforms) | `a98e428` | 豆瓣、雪球的文章入口与页面身份信息 |
+| [SyncCaster 平台适配器](https://github.com/RyanYipeng/SyncCaster/tree/7ba05f4870b9ae25d55ca8acdf1bfeba08045802/packages/adapters/src) | `7ba05f4` | CSDN 富文本入口、简书 kalamu 编辑器和新建文章流程 |
+
+标题上限未有可靠公开依据的网易、快传、豆瓣、CSDN、简书，能力表中的 `title_max:300` 仅沿用本地原稿上限，`title_limit_confirmed:false`。实际执行仍检查原生标题控件的限制与完整读回，不能将300字写成平台支持承诺。豆瓣、简书明确不使用独立封面；一点、大鱼、网易、雪球、京东、简书没有独立话题字段，不继承原稿默认 `tags`，也不会把普通正文文字冒充原生标签。
+
+### 三个汽车平台的官方依据
+
+车家号 `chejiahao`（账号类型 22）、易车号 `yiche`（23）、懂车号 `dongchedi`（24）的官方页面和公开脚本已于 2026-10-03 只读取得。三个原生适配器均已开放执行，支持独立双封面、正文与选项读回、预览保护和单次正式提交。公开源码和离线组件验证不构成真实账号的登录、图片上传、预览或发布证据，三者的 `live_verified` 和三项 `verification` 仍为 `false`。
+
+此前参考的蚁小二 [车家号](https://github.com/yixiaoer888/yixiaoer-skill/blob/a2722c6095f57abf2e345dca637bdded44fa34df/skills/yixiaoer/references/platforms/article/chejiahao.md)、[易车号](https://github.com/yixiaoer888/yixiaoer-skill/blob/a2722c6095f57abf2e345dca637bdded44fa34df/skills/yixiaoer/references/platforms/article/yichehao.md)文档及[正式网页业务脚本](https://www.yixiaoer.cn/web/assets/index-vGO4Yq33.js)用于确认文章类别与字段候选。原生页面与该契约不同的标题、封面和声明约束，以当前官方依据为准。PostSail 直接操作平台页面，不调用蚁小二发布服务。
+
+| 官方资源 | SHA-256 | 确认内容 |
+| --- | --- | --- |
+| [车家号 main.66716c76.js](https://creator.autohome.com.cn/web/static/js/main.66716c76.js) | `21a4b0cf10da3f4a347bff1bd38956bd14e2ce75b3e2cf49d09f2224dbf711f2` | `/web/publish/long`、Lexical 正文、横竖封面、原创与首发、上传协议和长文提交 |
+| [车家号封面美化 Index-Uq50sxX_.js](https://posterdesign.autohome.com.cn/assets/Index-Uq50sxX_.js) | `7ff3cd64d360a8b4eaafefb98222c0c72da0d9d3bafcd87ce982a9288d6d994c` | 美化 iframe 的就绪及取消交互，取消美化保留已选原图 |
+| [易车号 6657c87.js](https://mp.yiche.com/_nuxt/6657c87.js) | `72a947affa644c4cfd3f71cce72a844a6ebcc0b60b609f1a1b775a574fb34b12` | `/article/index-new`、Quill 正文、双封面裁剪组件、六种声明和提交字段 |
+| [易车号 49f3426.js](https://mp.yiche.com/_nuxt/49f3426.js) | `7fdf1821f47eacdcce3c7b0e9f81a618f7db1452dc6cd16201266445b7a89774` | 原生上传与 `savenews` 地址、请求封装 |
+| [懂车号 PublishArticle.9031c083.js](https://lf3-motor.dcarstatic.com/obj/motor-fe-static/motor/mp/v2/static/js/async/PublishArticle.9031c083.js) | `34ebd912c2ad6bd68e66e62d8221ec595ac138666bfe88df87f75280e84bbe5d` | `/profile_v2/publish/article`、正文图片节点、横竖封面、校验与提交载荷 |
+| [懂车号 7621.6951dfe3.js](https://lf3-motor.dcarstatic.com/obj/motor-fe-static/motor/mp/v2/static/js/async/7621.6951dfe3.js) | `0fcd7f338f2ec6ecf6f91e4eb5052379b88382c248a25f8c00c37be8da54d464` | 双封面编辑组件、上传状态、素材 URI 与持久图片地址 |
+
+| 平台 | 当前配置与原生依据 | 仍需真实账号验收 |
+| --- | --- | --- |
+| 车家号 | 原生加权标题 6–30 字、正文 10–100000 字；UTF-16 码元数值大于 256 计 1 字，其余计半字；横封面 4:3、至少 560×420px，竖封面 3:4、宽度至少 560px、高度至少 420px，建议 600×800px，各 ≤10MiB | 当前账号的长文权限、完整正文与双封面上传、原生选项、提交及公开文章 |
+| 易车号 | 原生标题 5–28 字；正文 HTML 上限配置为 8000 字符；横封面 3:2，竖封面 3:4 或 4:3；各 ≤10MiB、宽度 ≤5000px | 当前账号权限、Quill 正文及上传素材键、完整双封面流程、提交及公开文章 |
+| 懂车号 | 标题 2–30 字且至少 2 个汉字；原生正文去空白后 ≤50000 个 UTF-16 码元、原生 HTML ≤60000 个码元；横封面 4:3、至少 532×399px；竖封面 3:4、至少 534×712px；各 ≤20MiB | 当前账号权限、正文与封面素材 URI、最终提交及公开文章 |
+
+车家号旧入口 `/article/post.html` 已返回 404，当前长文使用 `creator.autohome.com.cn/web/publish/long`。当前官方 `Qi` 计数函数（模块 85311）采用上述加权口径，因此纯 ASCII 标题允许 12–60 个字符；早期契约中的「至少六个汉字」不再沿用。官方 Lexical 编辑器会移除超链接；含链接原稿须显式启用 `links_as_text` 才能转换为链接文字与完整网址，转换稿另存且保留原稿。用户须明确设置 `agree_upload_terms:true`，同意《汽车之家内容上传服务条款》《汽车之家联合共创须知》。目标账号要求内容属性时，须显式选择「非商业内容」或「商业内容」，不能由系统猜测。
+
+原生标题控件另行拒绝 Emoji 等特殊符号（包括 U+2600–U+27FF 和 UTF-16 代理对）；加权长度符合要求也不能跳过字符校验。
+
+车家号离线浏览器验证加载当前官方 Lexical、双封面选择和声明组件，核对 H2、加粗、正文图原生绑定、横竖封面表单字段及协议读回，浏览器无未处理错误。账号上下文与上传响应为本地模拟；封面美化 iframe 仅复现已核实的 `postMessage` 就绪和关闭交互。该结果验证组件和适配器的衔接，没有执行真实账号登录、素材上传或发布。
+
+易车号原生声明为「内容无需标注」「含AI生成内容」「含虚构演绎内容」「内容含营销信息」「个人观点，仅供参考」「内容为转载」；最后一项必须提供 `source_url`。早期蚁小二契约中的「不声明」「内容来源网络」「AI生成」「引用站内」不自动映射，已有原稿须重新选择。`allow_forward` 表示同意转发，`allow_abstract` 表示同意生成摘要，两项均默认关闭。三个汽车平台均不继承普通 `tags`，未开放原生话题、定时或平台草稿选项。
+
+易车官方 VueCropper 与 VueImageEditor 组件的离线浏览器验证确认，3:4 和 4:3 封面可保留完整画面，四角测试标记均保留。原生组件配置 `maxImgSize:2000`，可能缩放及重新编码，不承诺原像素尺寸或字节不变。此验证没有真实账号、素材上传或发布。
+
+三个平台的横封面使用 `cover_asset_id`，独立竖封面使用 `options.vertical_cover_asset_id`。后者是 `type:asset` 的已上传素材 ID，不接受服务器文件路径；原稿默认配置与任务快照保护素材引用，已引用素材不能删除。系统不从横封面自动生成竖封面。易车官方页面用 `imgBase64` 展示图片、用 `imgKey` 提交素材；懂车的封面预览也可能保留本地地址。此类预览只有与原生上传成功状态、素材键或 URI、待提交数据一致才可作为准备依据，单独显示图片不能证明上传成功。
+
+懂车号官方正文组件会将 H2–H6 导入为 H1。本版本通过 `heading_levels:[1]` 在准备前明确拒绝 H2–H6；用户可在原稿编辑器主动选择 H1 或普通段落并保存新修订。系统不会自动改变标题层级，也不会将不支持的标题转成图片。表格与代码块的通用图片转换不代表其他格式也能自动回退。
+
+懂车号原生组件可能把正文首图设为封面，适配器因此先上传用户指定的横竖封面，再填写正文，最终再次读回。未经请求的独家、活动、原创、定时或商业稿状态会阻止提交；作品同步授权仅通过原生关闭操作拒绝本次额外同步，不能自动开启其他平台同步或修改永久偏好。
+
+懂车官方 Syl 正文及图片组件的离线浏览器验证覆盖真实序列化、可见正文与图片节点的绑定；官方封面组件（模块 70421）及 `PublishImage`（模块 1752）的独立验证确认本次原生对象与可见图片绑定，解码失败的预览会被拒绝。图片响应由隔离页面提供，未向懂车上传素材，不能视为平台接收回执或真实账号验收。
+
+历史回归：2026-10-02 的 523 项本地测试及另行运行的 73 项共享专项通过，开启了受控浏览器测试；前端构建、汽车账号禁用提示、文章目标禁用提示和模拟启用下的封面组件通过检查。当时能力 API 为 21 个登记、18 个可执行、3 个禁用。该轮验证覆盖配置、素材引用和禁用边界，不包含本轮原生适配或真实账号发布。
+
+2026-10-03 的最终完整回归开启 `OMNIPOST_BROWSER_TESTS=1`，运行 `python -m unittest discover -s tests`，589 项全部通过、无跳过，耗时 245.017 秒；另行运行的 83 项共享专项也全部通过。前端生产构建通过，运行中能力 API 已读回 21 个可执行平台。网页检查包含三个汽车账号入口、横竖封面真实文件上传控件、车家号协议选择、易车转载来源和 H1 编辑按钮，未出现未处理的浏览器错误。这些本地检查未向外部平台发文。
+
+### 京东原生文章依据
+
+用户截图中的京东对应京东创作服务平台的原生文章。官方旧版路由将 `/new_create/0` 迁移到 [`/n/publish-article.html`](https://dr.jd.com/n/publish-article.html)，明确区分文章 `style=0`、图文 `style=25` 和视频 `style=2`。当前文章页面根节点为 `.dr-publish-article-wrapper[data-spm-c="c00009560"]`，正文使用 `#module-richtextNew #richtext-editor-box` 下的 Braft / Draft.js 编辑器；旧稿身份或非空已有正文会阻止覆盖。
+
+本次只读核对的官方公开资源如下：
+
+| 官方资源 | SHA-256 | 确认内容 |
+| --- | --- | --- |
+| [文章组件 index-CdTwnNcS.js](https://storage.360buyimg.com/ifloors/talent-platform-new/1790145277602/assets/index-CdTwnNcS.js) | `4c3bcc30b8bb34657515a329bd0b79731375ffcb90c4015224f78772be6776be` | 原生文章页面、正文序列化、图片上传、封面、提交与草稿的独立路径 |
+| [分类组件 index-CtzUM7Yv.js](https://storage.360buyimg.com/ifloors/talent-platform-new/1790145277602/assets/index-CtzUM7Yv.js) | `fd9fae2190264dab10d781992f0fecc79a608a26497a352ab0db9d1b2ac9ff89` | 三级标签类型、叶子选项及分类 ID 序列化 |
+| [级联控件 index-B60HG0SX.js](https://storage.360buyimg.com/ifloors/talent-platform-new/1790145277602/assets/index-B60HG0SX.js) | `0980e42eb77a507c4d5843eef0193c53ca9e78d9c5a69c86c1b527b886785010` | 菜单列、精确选项标题、悬停展开和选中状态 |
+| [蚁小二正式网页业务脚本](https://www.yixiaoer.cn/web/assets/index-vGO4Yq33.js) | `6fc2f82740e73659e4b6249477391c5074e47fbb899dde2fa21d4870de91a2b4` | `JingDong` 的文章表单，以及标题、封面与分级标签约束 |
+
+蚁小二的 `bde[A.JingDong] = ode` 将京东加入文章能力表，`ufe[A.JingDong] = UB` 创建包含 `title`、`covers`、`tagType` 和 `pubType` 的文章表单。标题要求15–27字，封面比例10:7、至少600×420像素、单张不超过5MiB，并提示不能选正文首图，不能带水印、文字或logo。其表单允许1–3张封面；PostSail 本版本每任务使用1张独立封面，通过素材 ID 和文件哈希拒绝复用正文首图。蚁小二的标签和草稿字段只是交叉参考，PostSail 直接操作京东原生页面，不调用蚁小二账号或发布服务，也不开放平台草稿选项。
+
+京东正文图片走原生上传控件，要求宽高均至少300px、单张不超过5MiB；不自动放大或裁剪不合格的原图。封面与正文上传后均须取得新的持久平台地址，本地 `blob:` 预览不能证明上传成功。可选 `options.category` 每任务选择1个完整的「一级/二级/三级」精确分类路径，逐层展开并确认叶子选中；普通 `tags` 不会冒充分级标签。实际标题、封面和其他必填字段由平台按账号或频道下发，当前页面出现更严格限制或未支持的必填字段时会停止。
+
+官方 Braft 配置会剥离普通粘贴样式，因此正文通过编辑器公开状态 API 和正常变更回调导入，保留原生表单变更链。校验同时检查可见正文与 `getRteContents()` 产生的发布正文；原生序列化可能移除可见的尖括号字面量，仅核对 DOM 不足以证明内容完整。格式、完整文本、链接目标、图片地址及顺序都须与准备稿一致，未知原生卡片不能直接跳过。含超链接的文章还要求当前账号可见原生「超链接」工具；没有此权限控件时停止。表格和代码块使用通用 PNG 回退，生成图片同样必须满足正文图片尺寸下限，不足时不会自动放大。
+
+离线 Chromium 加载了公开官方编辑器组件，验证公开 API、正常回调和原生正文序列化，包含富文本、图片及尖括号字面量等样例。该验证没有京东会话，没有向京东上传素材或提交文章；真实账号权限、服务端动态配置、图片持久化、验证码和发布回执仍需现场验收。官方成功文案为“发布成功，等待审核！”，只能对应 `submitted`；内容列表跳转也可能来自保存草稿，不能据此标记 `published`。
+
+此前新增十个平台的验证使用临时数据库、虚构会话、模拟网络响应与本地受控浏览器页面，覆盖账号类型隔离、官方域名边界、正向身份确认、原稿快照与幂等、必要选项、正文与素材读回、预览保护及单次提交边界。没有使用这些平台的真实账号，也没有为它们执行真实正式发布；这十个平台仍须逐个补齐本记录中的真实预览、接收回执和公开发表证据。三个汽车平台也未进行真实账号登录、上传或发布，不以官方组件离线验证代替真实验收。
 
 ## 提交安全与后续验收
 
 正式操作先持久化 `submit_started`，再执行第一次可能提交的动作。持久化失败不点击；点击已发出后即使超时，也不换候选按钮重发。微博多步骤在下一步前记录边界，两步各点一次；下一步异常或最终文案读回失败，同样保留提交后的不确定状态。
+
+三个汽车适配器均在准备期间拦截正式文章请求，预览不会解除阻断。正式模式只在提交边界持久化后放行一条与本次标题、完整正文、图片、双封面及选项匹配的请求，回执必须属于同一条请求；重复请求和草稿不会被当作成功发布。车家号同接口的自动草稿请求也被拦截，避免准备过程取得草稿 ID 或更新已有稿件。
+
+| 平台 | 正式文章请求 | `submitted` 的接口依据 |
+| --- | --- | --- |
+| 车家号 | `POST /openapi/content-api/gc/article/publish?publishType=1` | HTTP 2xx、整数 `returncode:0`，且 `result.id` 为有效正数 ID |
+| 易车号 | `POST /web_mp/api/v1/pub/savenews`，`action:2`、`publishType:2`、`newsId:0` | HTTP 2xx、`status` 为 1、`data.result` 明确成功且非每日限制提示；有合法 `newsId` 才记录 ID |
+| 懂车号 | `POST /motor/content_publish/publish_mp_article/v1`，`save:1`、`source:20` | HTTP 2xx、官方成功响应封装，且 `data.data.pgc_id` 为有效正数 ID |
+
+上述回执只证明平台接收，不证明已经公开发表；不根据内容 ID 拼接公开文章地址。
 
 抖音预览在编辑器打开前精确阻断 `https://creator.douyin.com/web/api/media/aweme/create_v2/`（包括其查询参数），保证早期封面准备期间创建请求也不能发出；封面完成后再安装 DOM 发布按钮与快捷键保护。正式模式不安装该阻断规则，而是在提交边界前安装被动响应监听。
 

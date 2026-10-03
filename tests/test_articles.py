@@ -18,14 +18,30 @@ from PIL import Image
 
 from utils.articles.assets import ArticleAssets, download_image, public_url
 from utils.articles.model import ArticleError, clean_content
+from utils.articles.platforms import PLATFORMS
 from utils.articles.routes import register_article_routes
 from utils.articles.service import ArticleService
 
 
-def image_bytes():
+NEW_PLATFORM_TYPES = {"yidian": 12, "dayu": 13, "netease": 14, "acfun": 15, "kuaichuan": 16,
+                      "xueqiu": 17, "jingdong": 18, "douban": 19, "csdn": 20, "jianshu": 21,
+                      "chejiahao": 22, "yiche": 23, "dongchedi": 24}
+AUTOMOTIVE_PLATFORMS = ("chejiahao", "yiche", "dongchedi")
+NEW_PLATFORM_OPTIONS = {
+    "yidian": {"statement": "原创内容"}, "dayu": {"statement": "原创内容"},
+    "netease": {"original": True}, "acfun": {"category": "生活", "summary": "文章摘要", "original": True},
+    "kuaichuan": {"original": True}, "xueqiu": {"visibility": "公开"},
+    "douban": {"original": True, "visibility": "公开"},
+    "csdn": {"summary": "文章摘要", "create_type": "原创"},
+    "chejiahao": {"original": False, "first_publish": False, "agree_upload_terms": True},
+    "yiche": {"declaration": "内容无需标注", "allow_forward": False, "allow_abstract": False},
+}
+
+
+def image_bytes(size=(640, 480), color="white"):
     """生成本地测试图片，不使用真实账号或官网素材。"""
     buffer = io.BytesIO()
-    Image.new("RGB", (640, 480), "white").save(buffer, "PNG")
+    Image.new("RGB", size, color).save(buffer, "PNG")
     return buffer.getvalue()
 
 
@@ -52,6 +68,527 @@ class ArticlesTest(unittest.TestCase):
     def publish(self, key="测试请求", targets=None, mode="publish"):
         return self.service.publish(self.article["id"], {"revision": self.article["revision"], "mode": mode,
                                     "idempotency_key": key, "targets": targets or [{"platform": "zhihu", "account_id": 1}]})
+
+    def add_new_platform_accounts(self):
+        """每个平台分配独立临时会话，不共享旧账号或真实凭据。"""
+        rows, targets = [], []
+        for platform, kind in NEW_PLATFORM_TYPES.items():
+            filename = f"{platform}.json"
+            (self.cookies / filename).write_text('{"cookies":[],"origins":[]}', encoding="utf-8")
+            rows.append((kind, kind, filename, f"{platform}测试账号", 1))
+            targets.append({"platform": platform, "account_id": kind})
+        with self.service.store.connect(write=True) as conn:
+            conn.executemany("INSERT INTO user_info VALUES (?,?,?,?,?)", rows)
+        return targets
+
+    def prepare_new_platform_article(self):
+        """建立符合各平台必填项的原稿，用真实素材存储与校验链路。"""
+        asset = self.service.assets.save(image_bytes(), "新平台配图.png")
+        jingdong_cover = self.service.assets.save(image_bytes((700, 490), "blue"), "京东独立封面.png")
+        vertical_cover = self.service.assets.save(image_bytes((600, 800), "green"), "汽车平台竖版封面.png")
+        yiche_cover = self.service.assets.save(image_bytes((720, 480), "red"), "易车横版封面.png")
+        defaults = {platform: {"options": dict(options)} for platform, options in NEW_PLATFORM_OPTIONS.items()}
+        defaults["jingdong"] = {"title": "京东独立文章发布自动化测试标题", "cover_asset_id": jingdong_cover["id"], "options": {}}
+        for platform in AUTOMOTIVE_PLATFORMS:
+            defaults.setdefault(platform, {}).setdefault("options", {})["vertical_cover_asset_id"] = vertical_cover["id"]
+        defaults["yiche"]["cover_asset_id"] = yiche_cover["id"]
+        self.article = self.service.create_article({
+            "title": "新平台独立文章测试标题", "format": "html",
+            "content": f'<p>需要保留的原始正文<img src="{asset["url"]}"></p>',
+            "cover_asset_id": asset["id"], "tags": ["技术"],
+            "platform_options": defaults,
+        })
+        return asset
+
+    def test_new_platform_snapshots_and_preview_are_immutable_and_idempotent(self):
+        """编辑原稿或重放幂等请求后，各平台仍执行首次冻结的独立预览。"""
+        targets = self.add_new_platform_accounts()
+        asset = self.prepare_new_platform_article()
+        for target in targets:
+            target["overrides"] = {"title": f'{PLATFORMS[target["platform"]]["label"]}独立平台文章发布快照测试标题'}
+        next(target for target in targets if target["platform"] == "csdn")["overrides"]["options"] = {"summary": "单账号独立摘要"}
+        request = {"revision": self.article["revision"], "mode": "preview",
+                   "idempotency_key": "新平台冻结预览", "targets": targets}
+        batch = self.service.publish(self.article["id"], request)
+        self.assertEqual(self.service.publish(self.article["id"], request)["id"], batch["id"])
+        with self.service.store.connect() as conn:
+            before = {row["platform"]: row["snapshot_json"] for row in conn.execute(
+                "SELECT platform,snapshot_json FROM article_publish_tasks WHERE batch_id=?", (batch["id"],))}
+        self.service.update_article(self.article["id"], {
+            "expected_revision": 1, "title": "编辑后的另一版本标题", "content": "已经移除图片的新正文",
+            "format": "text", "cover_asset_id": None, "platform_options": {}, "tags": [],
+        })
+        self.assertEqual(self.service.publish(self.article["id"], request)["id"], batch["id"])
+        with self.assertRaises(ArticleError):
+            self.service.assets.delete(asset["id"])
+
+        observed = set()
+        def preview(snapshot, cookie, assets, on_submit, directory):
+            platform = snapshot["platform"]
+            observed.add(platform)
+            self.assertEqual(snapshot, json.loads(before[platform]))
+            self.assertEqual(cookie, self.cookies / f"{platform}.json")
+            self.assertIn(asset["id"], assets)
+            self.assertEqual(snapshot["title"], f'{PLATFORMS[platform]["label"]}独立平台文章发布快照测试标题')
+            self.assertEqual(snapshot["content_html"], self.article["content_html"])
+            expected_tags = [] if platform in {"yidian", "dayu", "netease", "xueqiu", "jingdong", "jianshu", *AUTOMOTIVE_PLATFORMS} else ["技术"]
+            self.assertEqual(snapshot["tags"], expected_tags)
+            expected_cover = None if platform in {"douban", "jianshu"} else asset["id"]
+            if platform in {"jingdong", "yiche"}:
+                expected_cover = self.article["platform_options"][platform]["cover_asset_id"]
+            self.assertEqual(snapshot["cover_asset_id"], expected_cover)
+            expected_options = dict(NEW_PLATFORM_OPTIONS.get(platform, {}))
+            if platform in AUTOMOTIVE_PLATFORMS:
+                vertical_id = self.article["platform_options"][platform]["options"]["vertical_cover_asset_id"]
+                expected_options["vertical_cover_asset_id"] = vertical_id
+                self.assertIn(vertical_id, assets)
+                self.assertEqual((assets[vertical_id]["width"], assets[vertical_id]["height"]), (600, 800))
+            if platform == "csdn":
+                expected_options["summary"] = "单账号独立摘要"
+            self.assertEqual(snapshot["options"], expected_options)
+            return {"status": "previewed", "message": "隔离预览完成"}
+
+        self.service.runner = preview
+        self.assertTrue(self.service.acquire())
+        while self.service.run_next():
+            pass
+        complete = self.service.get_batch(batch["id"])
+        self.assertEqual(observed, set(NEW_PLATFORM_TYPES))
+        for task in complete["tasks"]:
+            self.assertFalse(task["submit_started"])
+            self.assertEqual(task["status"], "previewed", task)
+        with self.service.store.connect() as conn:
+            after = {row["platform"]: row["snapshot_json"] for row in conn.execute(
+                "SELECT platform,snapshot_json FROM article_publish_tasks WHERE batch_id=?", (batch["id"],))}
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM article_publish_batches").fetchone()[0], 1)
+        self.assertEqual(after, before)
+
+    def test_new_platform_wrong_account_leaves_valid_target_queued(self):
+        """错误账号不跨平台复用，也不会阻断同批次已有平台。"""
+        targets = self.add_new_platform_accounts()
+        self.prepare_new_platform_article()
+        targets = [{**target, "account_id": 1} for target in targets]
+        targets.append({"platform": "toutiao", "account_id": 2})
+        batch = self.publish(targets=targets, mode="preview")
+        tasks = {task["platform"]: task for task in batch["tasks"]}
+        self.assertEqual(tasks["toutiao"]["status"], "queued")
+        for platform in NEW_PLATFORM_TYPES:
+            task = tasks[platform]
+            with self.subTest(platform=platform):
+                self.assertEqual(task["status"], "failed")
+                self.assertEqual(task["stage"], "validation")
+                self.assertFalse(task["retry_allowed"])
+                self.assertFalse(task["submit_started"])
+                self.assertIn("不匹配", task["message"])
+
+    def test_temporarily_unavailable_platform_does_not_block_other_targets(self):
+        """维护开关阻止适配器构造与新任务，其余平台仍可正常排队。"""
+        from utils.articles.adapter import create_adapter
+        self.add_new_platform_accounts()
+        self.prepare_new_platform_article()
+        reason = "平台临时维护，请稍后重试"
+        with patch.dict(PLATFORMS["chejiahao"], {"available": False, "reason": reason}):
+            with self.assertRaisesRegex(ValueError, reason):
+                create_adapter({"platform": "chejiahao", "mode": "preview"}, Path("隔离账号.json"), None)
+            batch = self.publish(mode="preview", targets=[
+                {"platform": "chejiahao", "account_id": 22}, {"platform": "toutiao", "account_id": 2}])
+        tasks = {task["platform"]: task for task in batch["tasks"]}
+        self.assertEqual(tasks["toutiao"]["status"], "queued", tasks["toutiao"])
+        self.assertEqual(tasks["chejiahao"]["status"], "failed", tasks["chejiahao"])
+        self.assertEqual(tasks["chejiahao"]["message"], reason)
+        self.assertEqual(tasks["chejiahao"]["stage"], "validation")
+        self.assertFalse(tasks["chejiahao"]["submit_started"])
+        self.assertFalse(tasks["chejiahao"]["retry_allowed"])
+
+    def test_new_platform_preview_cannot_submit_even_with_incorrect_runner(self):
+        """新增平台同样受服务层预览保护，错误执行器不能触发正式提交。"""
+        targets = self.add_new_platform_accounts()
+        self.prepare_new_platform_article()
+        def broken_runner(snapshot, cookie, assets, on_submit, directory):
+            on_submit()
+            self.fail("预览提交回调必须被服务拒绝")
+        self.service.runner = broken_runner
+        batch = self.publish(mode="preview", targets=targets)
+        self.assertTrue(self.service.acquire())
+        while self.service.run_next():
+            pass
+        for task in self.service.get_batch(batch["id"])["tasks"]:
+            with self.subTest(platform=task["platform"]):
+                self.assertEqual(task["status"], "failed")
+                self.assertFalse(task["submit_started"])
+                self.assertIn("预览", task["message"])
+
+    def test_new_platform_explicit_unsupported_cover_or_tags_are_not_silently_dropped(self):
+        """通用字段可按能力继承，显式指定的不支持字段必须返回可修正错误。"""
+        self.add_new_platform_accounts()
+        asset = self.prepare_new_platform_article()
+        overrides = [(platform, {"cover_asset_id": asset["id"]}, "封面") for platform in ("douban", "jianshu")]
+        overrides.extend((platform, {"tags": ["显式话题"]}, "话题")
+                         for platform in ("yidian", "dayu", "netease", "xueqiu", "jingdong", "jianshu"))
+        overrides.extend((platform, {"tags": ["显式话题"]}, "话题") for platform in AUTOMOTIVE_PLATFORMS)
+        for index, (platform, changes, field) in enumerate(overrides):
+            with self.subTest(platform=platform, field=field):
+                batch = self.publish(key=f"显式覆盖-{index}", mode="preview", targets=[
+                    {"platform": platform, "account_id": NEW_PLATFORM_TYPES[platform], "overrides": changes}])
+                task = batch["tasks"][0]
+                self.assertEqual(task["status"], "failed")
+                self.assertEqual(task["stage"], "validation")
+                self.assertIn(field, task["message"])
+                self.assertFalse(task["retry_allowed"])
+
+    def test_missing_new_platform_requirements_fail_only_affected_targets(self):
+        """清空分类或标签后应指明对应平台必填项，已有平台仍可执行。"""
+        self.add_new_platform_accounts()
+        self.prepare_new_platform_article()
+        batch = self.publish(mode="preview", targets=[
+            {"platform": "acfun", "account_id": 15, "overrides": {"options": {"category": ""}}},
+            {"platform": "csdn", "account_id": 20, "overrides": {"tags": []}},
+            {"platform": "toutiao", "account_id": 2},
+        ])
+        tasks = {task["platform"]: task for task in batch["tasks"]}
+        self.assertEqual(tasks["toutiao"]["status"], "queued")
+        for platform, message in (("acfun", "分类"), ("csdn", "标签")):
+            self.assertEqual(tasks[platform]["status"], "failed")
+            self.assertIn(message, tasks[platform]["message"])
+            self.assertFalse(tasks[platform]["submit_started"])
+
+    def test_automotive_option_assets_are_frozen_referenced_and_loaded_for_runner(self):
+        """竖图独立于正文/横图，原稿或任务仍引用时不可删除，改稿不改变已有任务。"""
+        self.add_new_platform_accounts()
+        horizontal = self.prepare_new_platform_article()
+        original_vertical = self.article["platform_options"]["chejiahao"]["options"]["vertical_cover_asset_id"]
+        with self.assertRaises(ArticleError):
+            self.service.assets.delete(original_vertical)
+        targets = [{"platform": platform, "account_id": NEW_PLATFORM_TYPES[platform]} for platform in AUTOMOTIVE_PLATFORMS]
+        batch = self.publish(mode="preview", targets=targets)
+        self.assertEqual([task["status"] for task in batch["tasks"]], ["queued"] * 3)
+        replacement = self.service.assets.save(image_bytes((600, 800), "red"), "替换竖封面.png")
+        defaults = {platform: {"options": {**NEW_PLATFORM_OPTIONS.get(platform, {}),
+            "vertical_cover_asset_id": replacement["id"]}} for platform in AUTOMOTIVE_PLATFORMS}
+        self.service.update_article(self.article["id"], {"expected_revision": 1, "platform_options": defaults})
+        with self.assertRaises(ArticleError):
+            self.service.assets.delete(original_vertical)
+        with self.assertRaises(ArticleError):
+            self.service.assets.delete(self.article["platform_options"]["yiche"]["cover_asset_id"])
+
+        seen = set()
+        def runner(snapshot, cookie, assets, on_submit, directory):
+            platform = snapshot["platform"]
+            seen.add(platform)
+            self.assertEqual(snapshot["options"], {**NEW_PLATFORM_OPTIONS.get(platform, {}),
+                                                   "vertical_cover_asset_id": original_vertical})
+            expected_assets = {horizontal["id"], original_vertical}
+            if platform == "yiche":
+                expected_assets.add(self.article["platform_options"][platform]["cover_asset_id"])
+            self.assertEqual(set(assets), expected_assets)
+            self.assertNotIn(replacement["id"], assets)
+            self.assertEqual(Path(assets[original_vertical]["path"]).read_bytes(), image_bytes((600, 800), "green"))
+            self.assertEqual(cookie.name, f"{platform}.json")
+            return {"status": "previewed", "message": "隔离素材引用测试"}
+        self.service.runner = runner
+        self.assertTrue(self.service.acquire())
+        while self.service.run_next():
+            pass
+        self.assertEqual(seen, set(AUTOMOTIVE_PLATFORMS))
+        for task in self.service.get_batch(batch["id"])["tasks"]:
+            self.assertEqual(task["status"], "previewed", task)
+            self.assertFalse(task["submit_started"])
+
+    def test_automotive_vertical_cover_validation_leaves_other_targets_queued(self):
+        """缺图、错误引用和车家号尺寸比例违规在入队前失败，不影响其他目标。"""
+        self.add_new_platform_accounts()
+        self.prepare_new_platform_article()
+        bad_ratio = self.service.assets.save(image_bytes((480, 600), "red"), "错误比例竖图.png")
+        too_small = self.service.assets.save(image_bytes((240, 320), "red"), "过小竖图.png")
+        valid_minimum = self.service.assets.save(image_bytes((561, 748), "red"), "最小合法竖图.png")
+        below_minimum = self.service.assets.save(image_bytes((558, 744), "red"), "略小于最小竖图.png")
+        cases = [(platform, value, "failed") for platform in AUTOMOTIVE_PLATFORMS for value in (None, "missing-asset")]
+        cases.extend([("chejiahao", bad_ratio["id"], "failed"), ("chejiahao", too_small["id"], "failed"),
+                      ("chejiahao", below_minimum["id"], "failed"),
+                      ("chejiahao", valid_minimum["id"], "queued")])
+        for index, (platform, vertical_id, expected) in enumerate(cases):
+            with self.subTest(platform=platform, asset=vertical_id):
+                batch = self.publish(key=f"汽车竖封面校验-{index}", mode="preview", targets=[
+                    {"platform": platform, "account_id": NEW_PLATFORM_TYPES[platform],
+                     "overrides": {"options": {"vertical_cover_asset_id": vertical_id}}},
+                    {"platform": "toutiao", "account_id": 2}])
+                tasks = {task["platform"]: task for task in batch["tasks"]}
+                self.assertEqual(tasks["toutiao"]["status"], "queued", tasks["toutiao"])
+                task = tasks[platform]
+                self.assertEqual(task["status"], expected, task)
+                self.assertFalse(task["submit_started"])
+                if expected == "failed":
+                    self.assertEqual(task["stage"], "validation")
+                    self.assertFalse(task["retry_allowed"])
+                    self.assertTrue("封面" in task["message"] or "素材" in task["message"], task)
+
+    def test_automotive_title_characters_and_boundaries_do_not_truncate(self):
+        """原生长度规则各自生效，最长合法标题保留原文，相邻越界拒绝。"""
+        self.add_new_platform_accounts()
+        self.prepare_new_platform_article()
+        cases = [
+            ("chejiahao", "新车评测测", "failed"), ("chejiahao", "新车评测测试", "queued"),
+            ("chejiahao", "车" * 30, "queued"), ("chejiahao", "车" * 31, "failed"),
+            ("chejiahao", "a" * 11, "failed"), ("chejiahao", "a" * 12, "queued"),
+            ("chejiahao", "a" * 60, "queued"), ("chejiahao", "a" * 61, "failed"),
+            ("chejiahao", "🚗" * 2, "failed"), ("chejiahao", "🚗" * 3, "failed"),
+            ("chejiahao", "🚗" * 15, "failed"), ("chejiahao", "🚗" * 16, "failed"),
+            ("chejiahao", "车家标题测试☀", "failed"), ("chejiahao", "车家标题测试⟿", "failed"),
+            ("yiche", "车" * 4, "failed"), ("yiche", "车" * 5, "queued"),
+            ("yiche", "车" * 28, "queued"), ("yiche", "车" * 29, "failed"),
+            ("dongchedi", "车abc", "failed"), ("dongchedi", "新车", "queued"),
+            ("dongchedi", "车" * 30, "queued"), ("dongchedi", "车" * 31, "failed"),
+        ]
+        for index, (platform, title, expected) in enumerate(cases):
+            with self.subTest(platform=platform, title=title):
+                batch = self.publish(key=f"汽车标题-{index}", mode="preview", targets=[
+                    {"platform": platform, "account_id": NEW_PLATFORM_TYPES[platform], "overrides": {"title": title}}])
+                task = batch["tasks"][0]
+                self.assertEqual(task["status"], expected, task)
+                if expected == "queued":
+                    with self.service.store.connect() as conn:
+                        snapshot = json.loads(conn.execute("SELECT snapshot_json FROM article_publish_tasks WHERE id=?", (task["id"],)).fetchone()[0])
+                    self.assertEqual(snapshot["title"], title)
+                else:
+                    self.assertIn("标题", task["message"])
+                    self.assertFalse(task["retry_allowed"])
+
+    def test_chejiahao_horizontal_cover_uses_confirmed_dimensions_and_ratio(self):
+        """车家号横图的最小尺寸包含边界，比例不符或略小都不能排队。"""
+        self.add_new_platform_accounts()
+        self.prepare_new_platform_article()
+        for size, expected in (((560, 420), "queued"), ((640, 480), "queued"),
+                               ((560, 421), "failed"), ((556, 417), "failed")):
+            with self.subTest(size=size):
+                cover = self.service.assets.save(image_bytes(size, "red"), f"横图{size}.png")
+                batch = self.publish(key=f"车家号横图-{size}", mode="preview", targets=[
+                    {"platform": "chejiahao", "account_id": 22, "overrides": {"cover_asset_id": cover["id"]}}])
+                task = batch["tasks"][0]
+                self.assertEqual(task["status"], expected, task)
+                if expected == "failed":
+                    self.assertIn("封面", task["message"])
+                    self.assertFalse(task["retry_allowed"])
+
+    def test_chejiahao_upload_terms_require_explicit_consent_per_target(self):
+        """条款未同意不能排队；已保存同意也允许单账号明确拒绝，其他平台不受影响。"""
+        self.add_new_platform_accounts()
+        self.prepare_new_platform_article()
+        for index, (agreement, expected) in enumerate(((None, "failed"), (False, "failed"), (True, "queued"))):
+            batch = self.publish(key=f"车家条款-{index}", mode="preview", targets=[
+                {"platform": "chejiahao", "account_id": 22, "overrides": {"options": {"agree_upload_terms": agreement}}},
+                {"platform": "toutiao", "account_id": 2}])
+            tasks = {task["platform"]: task for task in batch["tasks"]}
+            self.assertEqual(tasks["toutiao"]["status"], "queued", tasks["toutiao"])
+            task = tasks["chejiahao"]
+            self.assertEqual(task["status"], expected, task)
+            if expected == "failed":
+                self.assertIn("同意", task["message"])
+                self.assertFalse(task["retry_allowed"])
+                self.assertFalse(task["submit_started"])
+
+    def test_chejiahao_links_require_explicit_conversion_before_browser(self):
+        """原稿保留链接，执行前须明确允许降级为文字与完整网址，不能静默丢失。"""
+        from utils.articles.adapter import validate_task
+        self.add_new_platform_accounts()
+        cover = self.prepare_new_platform_article()
+        self.article = self.service.update_article(self.article["id"], {
+            "expected_revision": self.article["revision"], "format": "html",
+            "content": '<p>来源：<a href="https://example.com/original">原始文章</a></p>'})
+        vertical_id = self.article["platform_options"]["chejiahao"]["options"]["vertical_cover_asset_id"]
+        assets = {cover["id"]: self.service.assets.get(cover["id"]), vertical_id: self.service.assets.get(vertical_id)}
+        snapshot = self.service.snapshot(self.article, {"platform": "chejiahao"}, "preview")
+        with self.assertRaisesRegex(ValueError, "超链接"):
+            validate_task(snapshot, assets)
+        with self.assertRaisesRegex(ValueError, "超链接"):
+            validate_task({**snapshot, "options": {**snapshot["options"], "links_as_text": False}}, assets)
+        explicit = {**snapshot, "options": {**snapshot["options"], "links_as_text": True}}
+        self.assertEqual(validate_task(explicit, assets), Path(assets[cover["id"]]["path"]))
+        self.assertIn('<a href="https://example.com/original"', snapshot["content_html"])
+
+    def test_dongchedi_separate_cover_boundaries_are_validated_before_queueing(self):
+        """懂车官方横竖封面最小尺寸不同，两张图片都必须符合原生裁剪比例。"""
+        self.add_new_platform_accounts()
+        self.prepare_new_platform_article()
+        cases = [
+            ("horizontal", (532, 399), "queued"), ("horizontal", (528, 396), "failed"),
+            ("horizontal", (532, 400), "failed"), ("vertical", (534, 712), "queued"),
+            ("vertical", (531, 708), "failed"), ("vertical", (534, 711), "failed"),
+        ]
+        for role, size, expected in cases:
+            with self.subTest(role=role, size=size):
+                cover = self.service.assets.save(image_bytes(size, "red"), f"懂车{role}{size}.png")
+                overrides = {"cover_asset_id": cover["id"]} if role == "horizontal" else {
+                    "options": {"vertical_cover_asset_id": cover["id"]}}
+                batch = self.publish(key=f"懂车封面-{role}-{size}", mode="preview", targets=[
+                    {"platform": "dongchedi", "account_id": 24, "overrides": overrides},
+                    {"platform": "toutiao", "account_id": 2}])
+                tasks = {task["platform"]: task for task in batch["tasks"]}
+                self.assertEqual(tasks["toutiao"]["status"], "queued", tasks["toutiao"])
+                task = tasks["dongchedi"]
+                self.assertEqual(task["status"], expected, task)
+                if expected == "failed":
+                    self.assertIn("封面", task["message"])
+                    self.assertFalse(task["retry_allowed"])
+                    self.assertFalse(task["submit_started"])
+
+    def test_dongchedi_heading_levels_fail_before_queueing_without_changing_original(self):
+        """一级标题/普通段落可排队，二至六级标题只阻断懂车，原稿层级不被改写。"""
+        self.add_new_platform_accounts()
+        self.prepare_new_platform_article()
+        cases = [("p", "queued"), ("h1", "queued"), *[(f"h{level}", "failed") for level in range(2, 7)]]
+        for tag, expected in cases:
+            with self.subTest(tag=tag):
+                content = f"<{tag}>保留原始标题层级</{tag}><p>完整正文内容。</p>"
+                self.article = self.service.update_article(self.article["id"], {
+                    "expected_revision": self.article["revision"], "format": "html", "content": content})
+                batch = self.publish(key=f"懂车标题层级-{tag}", mode="preview", targets=[
+                    {"platform": "dongchedi", "account_id": 24}, {"platform": "toutiao", "account_id": 2}])
+                tasks = {task["platform"]: task for task in batch["tasks"]}
+                self.assertEqual(tasks["toutiao"]["status"], "queued", tasks["toutiao"])
+                self.assertEqual(tasks["dongchedi"]["status"], expected, tasks["dongchedi"])
+                self.assertEqual(self.service.get_article(self.article["id"])["content_html"], content)
+                if expected == "failed":
+                    task = tasks["dongchedi"]
+                    self.assertEqual(task["stage"], "validation")
+                    self.assertIn("一级标题", task["message"])
+                    self.assertFalse(task["retry_allowed"])
+                    self.assertFalse(task["submit_started"])
+
+    def test_yiche_cover_variants_and_html_limit_follow_article_contract(self):
+        """易车接受契约中的两种竖图比例，横图宽度及正文 HTML 上限分别生效。"""
+        self.add_new_platform_accounts()
+        self.prepare_new_platform_article()
+        for size, expected in (((480, 640), "queued"), ((640, 480), "queued"), ((640, 640), "failed")):
+            cover = self.service.assets.save(image_bytes(size, "red"), f"易车竖图{size}.png")
+            batch = self.publish(key=f"易车竖图-{size}", mode="preview", targets=[
+                {"platform": "yiche", "account_id": 23, "overrides": {"options": {"vertical_cover_asset_id": cover["id"]}}}])
+            self.assertEqual(batch["tasks"][0]["status"], expected, batch["tasks"][0])
+        wrong_ratio = self.service.assets.save(image_bytes((640, 480), "blue"), "易车错误横图比例.png")
+        invalid = self.publish(key="易车横图比例", mode="preview", targets=[
+            {"platform": "yiche", "account_id": 23, "overrides": {"cover_asset_id": wrong_ratio["id"]}}])["tasks"][0]
+        self.assertEqual(invalid["status"], "failed", invalid)
+        self.assertIn("3:2", invalid["message"])
+        for width, expected in ((4998, "queued"), (5001, "failed")):
+            cover = self.service.assets.save(image_bytes((width, width * 2 // 3), "red"), f"易车横图{width}.png")
+            batch = self.publish(key=f"易车横图-{width}", mode="preview", targets=[
+                {"platform": "yiche", "account_id": 23, "overrides": {"cover_asset_id": cover["id"]}}])
+            task = batch["tasks"][0]
+            self.assertEqual(task["status"], expected, task)
+            if expected == "failed":
+                self.assertIn("5000", task["message"])
+        for length, expected in ((8000, "queued"), (8001, "failed")):
+            self.article = self.service.update_article(self.article["id"], {
+                "expected_revision": self.article["revision"], "content": "<p>" + "字" * (length - 7) + "</p>", "format": "html"})
+            self.assertEqual(len(self.article["content_html"]), length)
+            batch = self.publish(key=f"易车正文-{length}", mode="preview", targets=[
+                {"platform": "yiche", "account_id": 23}, {"platform": "toutiao", "account_id": 2}])
+            tasks = {task["platform"]: task for task in batch["tasks"]}
+            self.assertEqual(tasks["toutiao"]["status"], "queued", tasks["toutiao"])
+            self.assertEqual(tasks["yiche"]["status"], expected, tasks["yiche"])
+            if expected == "failed":
+                self.assertIn("8000", tasks["yiche"]["message"])
+                self.assertFalse(tasks["yiche"]["submit_started"])
+
+    def test_yiche_reprint_source_failure_is_isolated_and_frozen_in_valid_snapshot(self):
+        """有效转载链接原样冻结；缺失来源或旧声明只阻断对应账号，不能自动变更声明。"""
+        self.add_new_platform_accounts()
+        self.prepare_new_platform_article()
+        source = "https://example.com/article?version=original"
+        for index, (options, expected) in enumerate([
+            ({"declaration": "内容为转载"}, "failed"),
+            ({"declaration": "内容为转载", "source_url": "javascript:alert(1)"}, "failed"),
+            ({"declaration": "AI生成"}, "failed"),
+            ({"declaration": "内容为转载", "source_url": source}, "queued"),
+        ]):
+            batch = self.publish(key=f"易车转载-{index}", mode="preview", targets=[
+                {"platform": "yiche", "account_id": 23, "overrides": {"options": options}},
+                {"platform": "toutiao", "account_id": 2}])
+            tasks = {task["platform"]: task for task in batch["tasks"]}
+            self.assertEqual(tasks["toutiao"]["status"], "queued", tasks["toutiao"])
+            task = tasks["yiche"]
+            self.assertEqual(task["status"], expected, task)
+            if expected == "queued":
+                with self.service.store.connect() as conn:
+                    snapshot = json.loads(conn.execute("SELECT snapshot_json FROM article_publish_tasks WHERE id=?", (task["id"],)).fetchone()[0])
+                self.assertEqual(snapshot["options"]["source_url"], source)
+                self.assertEqual(snapshot["options"]["declaration"], "内容为转载")
+                self.assertIs(snapshot["options"]["allow_forward"], False)
+                self.assertIs(snapshot["options"]["allow_abstract"], False)
+            else:
+                self.assertEqual(task["stage"], "validation")
+                self.assertFalse(task["retry_allowed"])
+                self.assertFalse(task["submit_started"])
+
+    def test_jingdong_cover_constraints_are_enforced_before_queueing(self):
+        """京东错误比例、尺寸和文件大小只阻断自己的任务，合法独立封面可入队。"""
+        self.add_new_platform_accounts()
+        body = self.service.assets.save(image_bytes(), "独立正文首图.png")
+        oversized = io.BytesIO()
+        Image.new("RGB", (2100, 1470), "blue").save(oversized, "PNG", compress_level=0)
+        self.assertGreater(len(oversized.getvalue()), 5 * 1024 * 1024)
+        cases = [
+            ("错误比例", image_bytes((700, 500), "red"), "failed"),
+            ("尺寸过小", image_bytes((500, 350), "red"), "failed"),
+            ("超过五兆", oversized.getvalue(), "failed"),
+            ("最小合法尺寸", image_bytes((600, 420), "red"), "queued"),
+            ("独立合法封面", image_bytes((700, 490), "blue"), "queued"),
+        ]
+        for label, data, expected in cases:
+            with self.subTest(case=label):
+                cover = self.service.assets.save(data, f"{label}.png")
+                self.article = self.service.create_article({
+                    "title": "京东独立文章发布自动化测试标题", "format": "html",
+                    "content": f'<p>正文及第一张图片<img src="{body["url"]}"></p>',
+                    "cover_asset_id": cover["id"],
+                })
+                batch = self.publish(key=label, mode="preview", targets=[
+                    {"platform": "jingdong", "account_id": 18}, {"platform": "toutiao", "account_id": 2},
+                ])
+                tasks = {task["platform"]: task for task in batch["tasks"]}
+                self.assertEqual(tasks["toutiao"]["status"], "queued", tasks["toutiao"])
+                self.assertEqual(tasks["jingdong"]["status"], expected, tasks["jingdong"])
+                self.assertFalse(tasks["jingdong"]["submit_started"])
+                if expected == "failed":
+                    self.assertEqual(tasks["jingdong"]["stage"], "validation")
+                    self.assertIn("封面", tasks["jingdong"]["message"])
+                    self.assertFalse(tasks["jingdong"]["retry_allowed"])
+
+    def test_jingdong_rejects_first_body_image_as_cover_even_after_asset_reimport(self):
+        """图片重复导入仍按文件去重，不能把正文首图换个文件名当封面。"""
+        self.add_new_platform_accounts()
+        body = self.service.assets.save(image_bytes((700, 490), "blue"), "正文首图.png")
+        duplicate = self.service.assets.save(image_bytes((700, 490), "blue"), "重新导入为封面.png")
+        self.assertEqual(body["id"], duplicate["id"])
+        self.article = self.service.create_article({
+            "title": "京东独立文章发布自动化测试标题", "format": "html",
+            "content": f'<p>正文<img src="{body["url"]}"></p>', "cover_asset_id": duplicate["id"],
+        })
+        batch = self.publish(mode="preview", targets=[{"platform": "jingdong", "account_id": 18}])
+        task = batch["tasks"][0]
+        self.assertEqual(task["status"], "failed")
+        self.assertEqual(task["stage"], "validation")
+        self.assertIn("封面", task["message"])
+        self.assertFalse(task["submit_started"])
+        self.assertFalse(task["retry_allowed"])
+
+    def test_jingdong_title_limits_preserve_exact_boundary_without_truncation(self):
+        """15 至 27 字标题均保留原文；相邻越界长度在服务入口失败。"""
+        self.add_new_platform_accounts()
+        self.prepare_new_platform_article()
+        for length, expected in ((14, "failed"), (15, "queued"), (27, "queued"), (28, "failed")):
+            with self.subTest(length=length):
+                title = "京" * length
+                batch = self.publish(key=f"京东标题-{length}", mode="preview", targets=[
+                    {"platform": "jingdong", "account_id": 18, "overrides": {"title": title}}])
+                task = batch["tasks"][0]
+                self.assertEqual(task["status"], expected, task)
+                if expected == "queued":
+                    with self.service.store.connect() as conn:
+                        stored = json.loads(conn.execute("SELECT snapshot_json FROM article_publish_tasks WHERE id=?", (task["id"],)).fetchone()[0])
+                    self.assertEqual(stored["title"], title)
+                else:
+                    self.assertIn("标题", task["message"])
+                    self.assertFalse(task["retry_allowed"])
 
     def test_normalize_and_revision_conflict(self):
         """脚本清理、Markdown 语义和修订锁共同保护原稿。"""
@@ -266,17 +803,31 @@ class ArticlesTest(unittest.TestCase):
         with other.store.connect() as conn:
             self.assertEqual(tuple(conn.execute("SELECT * FROM file_info").fetchone()), (7, "旧视频素材.mp4"))
 
-    def test_acceptance_fixture_all_eight_platforms(self):
-        """真实测试稿走八平台模拟任务，验证正文图片、封面和快照，而非实际外部发布。"""
+    def test_acceptance_fixture_all_twenty_one_platforms(self):
+        """二十一个平台共用完整测试稿；仅在隔离执行边界模拟回执。"""
         root = Path(__file__).parent / "fixtures" / "article-acceptance"
         content = (root / "原稿.md").read_text(encoding="utf-8")
+        # 共用合法稿仅用一级标题；懂车拒绝更深层级另有独立回归。
+        content = content.replace("\n## ", "\n# ")
         assets = []
         for number in range(1, 4):
             asset = self.service.assets.save((root / f"image-{number}.png").read_bytes(), f"图片{number}.png")
             assets.append(asset)
             content = content.replace(f"image-{number}.png", asset["url"])
+        jingdong_cover = self.service.assets.save(image_bytes((700, 490), "blue"), "京东独立封面.png")
+        automotive_cover = self.service.assets.save(image_bytes((640, 480), "red"), "汽车平台横封面.png")
+        vertical_cover = self.service.assets.save(image_bytes((600, 800), "green"), "汽车平台竖封面.png")
+        yiche_cover = self.service.assets.save(image_bytes((720, 480), "red"), "易车横版封面.png")
+        defaults = {platform: {"options": dict(options)} for platform, options in NEW_PLATFORM_OPTIONS.items()}
+        defaults["jingdong"] = {"cover_asset_id": jingdong_cover["id"]}
+        defaults["chejiahao"]["options"]["links_as_text"] = True
+        for platform in AUTOMOTIVE_PLATFORMS:
+            defaults.setdefault(platform, {}).setdefault("options", {})["vertical_cover_asset_id"] = vertical_cover["id"]
+            defaults[platform]["cover_asset_id"] = automotive_cover["id"]
+        defaults["yiche"]["cover_asset_id"] = yiche_cover["id"]
         self.article = self.service.create_article({"title": "PostSail 图文发布测试，请忽略", "content": content,
-            "format": "markdown", "cover_asset_id": assets[0]["id"]})
+            "format": "markdown", "cover_asset_id": assets[0]["id"], "tags": ["技术"],
+            "platform_options": defaults})
         self.assertEqual(self.article["content_html"].count("<img"), 3)
         self.assertIn("<table", self.article["content_html"])
         self.assertIn("<pre><code", self.article["content_html"])
@@ -288,10 +839,12 @@ class ArticlesTest(unittest.TestCase):
         targets = [{"platform": platform, "account_id": account} for platform, account in
                    [("zhihu", 1), ("toutiao", 2), ("baijiahao", 3), ("sohu", 4),
                     ("douyin", 5), ("bilibili", 6), ("weibo", 7), ("qiehao", 8)]]
+        targets.extend(self.add_new_platform_accounts())
         observed = []
         def runner(snapshot, cookie, managed_assets, on_submit, directory):
             observed.append((snapshot["platform"], snapshot["mode"]))
-            self.assertEqual(len(managed_assets), 3)
+            expected_assets = 5 if snapshot["platform"] in AUTOMOTIVE_PLATFORMS else 4 if snapshot["platform"] == "jingdong" else 3
+            self.assertEqual(len(managed_assets), expected_assets)
             self.assertEqual(snapshot["content_html"], self.article["content_html"])
             if snapshot["mode"] == "preview":
                 return {"status": "previewed", "message": "模拟平台预览"}
@@ -300,13 +853,18 @@ class ArticlesTest(unittest.TestCase):
         self.service.runner = runner
         self.service.acquire()
         for mode in ("preview", "publish"):
-            batch = self.publish(key=f"八平台验收-{mode}", mode=mode, targets=targets)
+            batch = self.publish(key=f"二十一平台契约-{mode}", mode=mode, targets=targets)
             while self.service.run_next():
                 pass
             tasks = self.service.get_batch(batch["id"])["tasks"]
             expected = "previewed" if mode == "preview" else "submitted"
-            self.assertEqual([task["status"] for task in tasks], [expected] * 8)
-        self.assertEqual(len(observed), 16)
+            self.assertEqual(len(tasks), 21)
+            for task in tasks:
+                with self.subTest(platform=task["platform"], mode=mode):
+                    self.assertEqual(task["status"], expected, task)
+                    self.assertEqual(bool(task["submit_started"]), mode == "publish")
+        self.assertEqual(set(observed), {(platform, mode) for platform in PLATFORMS for mode in ("preview", "publish")})
+        self.assertEqual(len(observed), 42)
 
     def test_schedule_explicitly_rejected(self):
         with self.assertRaises(ArticleError):
@@ -448,7 +1006,7 @@ class ArticlesTest(unittest.TestCase):
         self.assertEqual(client.get("/api/articles").json["data"][0]["id"], self.article["id"])
         self.assertEqual(client.patch(f'/api/articles/{self.article["id"]}', json={"expected_revision": 0}).status_code, 409)
         caps = client.get("/api/article-capabilities").json["data"]["platforms"]
-        self.assertEqual(len(caps), 8)
+        self.assertEqual(len(caps), 21)
         self.assertTrue(all(not item["scheduled"] for item in caps))
 
 

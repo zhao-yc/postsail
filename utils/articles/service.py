@@ -13,7 +13,9 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .assets import ArticleAssets, utc_now
-from .model import ArticleError, PLATFORMS, clean_content, image_references, validate_options
+from .model import (ArticleError, PLATFORMS, clean_content, image_references, validate_options,
+                    validate_platform_content, validate_platform_cover, option_asset_ids,
+                    validate_option_asset, validate_title_characters)
 from .store import ArticleStore, encode
 
 BLOCK_DUPLICATES = {"queued", "running", "needs_action", "submitted", "published", "unknown"}
@@ -97,7 +99,7 @@ class ArticleService:
         if cover:
             self.assets.get(cover)
             parser.ids.add(cover)
-        for default in defaults.values():
+        for platform, default in defaults.items():
             if not isinstance(default, dict):
                 raise ArticleError("平台覆盖项必须为 JSON 对象")
             if not isinstance(default.get("options", {}), dict):
@@ -105,6 +107,9 @@ class ArticleService:
             if default.get("cover_asset_id"):
                 self.assets.get(default["cover_asset_id"])
                 parser.ids.add(default["cover_asset_id"])
+            for asset_id in option_asset_ids(platform, default.get("options", {})).values():
+                self.assets.get(asset_id)
+                parser.ids.add(asset_id)
         return {"title": title.strip(), "content_html": "".join(parser.output), "cover_asset_id": cover,
                 "tags": tags, "platform_options": defaults}, parser.ids
 
@@ -194,6 +199,8 @@ class ArticleService:
         platform = target.get("platform")
         if platform not in PLATFORMS:
             raise ArticleError("不支持的文章平台")
+        if PLATFORMS[platform].get("available") is False:
+            raise ArticleError(PLATFORMS[platform]["reason"])
         defaults = article["platform_options"].get(platform, {})
         overrides = target.get("overrides", {})
         if not isinstance(overrides, dict):
@@ -212,7 +219,12 @@ class ArticleService:
         rules = PLATFORMS[platform]
         if not rules["title_min"] <= len(title.strip()) <= rules["title_max"]:
             raise ArticleError(f"{rules['label']}标题需 {rules['title_min']}–{rules['title_max']} 字，请设置该平台标题")
+        validate_title_characters(platform, title)
         cover = effective.get("cover_asset_id") or article["cover_asset_id"]
+        if rules.get("cover_supported") is False:
+            if effective.get("cover_asset_id"):
+                raise ArticleError(f"{rules['label']}文章不支持单独设置封面")
+            cover = None
         if rules["cover_required"] and not cover:
             raise ArticleError(f"{rules['label']}必须设置封面")
         if cover:
@@ -221,12 +233,21 @@ class ArticleService:
                 raise ArticleError(f"{rules['label']}封面超过大小限制")
             if asset["width"] <= rules["cover_min_width"] or asset["height"] <= rules["cover_min_height"]:
                 raise ArticleError(f"{rules['label']}封面尺寸必须大于 {rules['cover_min_width']}×{rules['cover_min_height']}")
+            validate_platform_cover(platform, asset)
+            if platform == "jingdong":
+                images = image_references(article["content_html"])
+                first_id = images[0].get("data-asset-id") if images else None
+                validate_platform_cover(platform, asset, self.assets.get(first_id) if first_id else None)
         validate_options(platform, options)
+        asset_fields = {field["name"]: field for field in rules["option_fields"] if field["type"] == "asset"}
+        for name, asset_id in option_asset_ids(platform, options).items():
+            validate_option_asset(asset_fields[name], self.assets.get(asset_id))
         tags = effective.get("tags")
         if tags is None:
-            tags = article["tags"]
+            tags = [] if rules.get("tags_supported") is False else article["tags"]
         if not isinstance(tags, list) or len(tags) > 20 or any(not isinstance(tag, str) or len(tag) > 100 for tag in tags):
             raise ArticleError("平台话题必须为文本数组，最多 20 个，每项不超过 100 字")
+        validate_platform_content(platform, article["content_html"], tags)
         return {"platform": platform, "title": title.strip(), "content_html": article["content_html"],
                 "cover_asset_id": cover, "tags": tags, "options": options, "mode": mode}
 
@@ -296,6 +317,7 @@ class ArticleService:
                         (task_id, batch_id, article_id, revision, platform, account_id, mode,
                          encode(snapshot), status, "validation" if status == "failed" else "queued", message, now, now))
                     refs = [img.get("data-asset-id") for img in image_references(snapshot["content_html"])]
+                    refs.extend(option_asset_ids(platform, snapshot["options"]).values())
                     self.store.refs(conn, "task", task_id, refs + [snapshot.get("cover_asset_id")])
         self.wakeup.set()
         return self.get_batch(batch_id)
@@ -461,6 +483,7 @@ class ArticleService:
             asset_ids = {image.get("data-asset-id") for image in image_references(snapshot["content_html"])}
             if snapshot.get("cover_asset_id"):
                 asset_ids.add(snapshot["cover_asset_id"])
+            asset_ids.update(option_asset_ids(snapshot["platform"], snapshot.get("options", {})).values())
             assets = {asset_id: self.assets.get(asset_id) for asset_id in asset_ids if asset_id}
             runner = self.runner
             if runner is None:

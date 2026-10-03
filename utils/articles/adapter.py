@@ -11,7 +11,8 @@ from utils.articles.browser import (
     prepare_and_paste_document, read_result_evidence, save_screenshot, launch_article_browser,
     validate_assets, verify_rich_structure, inspect_content,
 )
-from utils.articles.model import PLATFORMS, validate_options
+from utils.articles.model import (PLATFORMS, validate_options, validate_platform_content,
+    validate_platform_cover, option_asset_ids, validate_option_asset, validate_title_characters)
 
 
 TITLE_LIMITS = {name: (rules["title_min"], rules["title_max"]) for name, rules in PLATFORMS.items()}
@@ -27,6 +28,7 @@ def validate_task(snapshot: dict, assets: dict) -> Path | None:
     title = str(snapshot.get("title", "")).strip()
     if not low <= len(title) <= high:
         raise ValueError(f"{rules['label']}文章标题须为 {low}-{high} 个字符")
+    validate_title_characters(platform, title)
     if snapshot.get("mode") not in {"preview", "publish"}:
         raise ValueError("文章任务只能选择预览或立即发布")
     if snapshot.get("publish_date", 0) != 0:
@@ -39,6 +41,19 @@ def validate_task(snapshot: dict, assets: dict) -> Path | None:
     if any(options.get(key) for key in ("schedule", "publish_date", "enableTimer")):
         raise ValueError("文章暂不支持定时发布")
     validate_options(platform, options)
+    asset_fields = {field["name"]: field for field in rules["option_fields"] if field["type"] == "asset"}
+    for name, asset_id in option_asset_ids(platform, options).items():
+        extra = assets.get(asset_id)
+        if not extra:
+            raise ValueError(f"{asset_fields[name]['label']}素材不存在")
+        extra_path = Path(extra.get("path", ""))
+        if not extra_path.is_absolute() or not extra_path.is_file():
+            raise ValueError(f"{asset_fields[name]['label']}文件不存在")
+        validate_option_asset(asset_fields[name], {**extra, "size": extra_path.stat().st_size})
+    tags = snapshot.get("tags") or []
+    if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
+        raise ValueError("文章话题必须为文本数组")
+    validate_platform_content(platform, snapshot.get("content_html", ""), tags)
     parsed = inspect_content(snapshot.get("content_html", ""))
     if rules.get("body_max_images") and len(parsed.asset_ids) > rules["body_max_images"]:
         raise ValueError(f"{rules['label']}正文最多包含 {rules['body_max_images']} 张图片")
@@ -47,10 +62,12 @@ def validate_task(snapshot: dict, assets: dict) -> Path | None:
         raise ValueError(f"{rules['label']}正文最多 {rules['body_max_chars']} 字")
     if rules.get("tags_max") and len(snapshot.get("tags") or []) > rules["tags_max"]:
         raise ValueError(f"{rules['label']}最多选择 {rules['tags_max']} 个话题")
-    if platform == "douyin" and parsed.links and not options.get("links_as_text"):
-        raise ValueError("抖音原生文章不支持正文超链接，请启用“将不支持的超链接转为文字和完整网址”选项")
+    if platform in {"douyin", "chejiahao"} and parsed.links and not options.get("links_as_text"):
+        raise ValueError(f"{rules['label']}原生文章不支持正文超链接，请启用“将不支持的超链接转为文字和完整网址”选项")
     validate_assets(snapshot.get("content_html", ""), assets)
     cover_id = snapshot.get("cover_asset_id")
+    if cover_id and rules.get("cover_supported") is False:
+        raise ValueError(f"{rules['label']}文章不支持单独设置封面")
     if not cover_id:
         if rules["cover_required"]:
             raise ValueError(f"{rules['label']}文章必须选择展示封面")
@@ -69,6 +86,11 @@ def validate_task(snapshot: dict, assets: dict) -> Path | None:
     if (int(asset.get("width") or 0) <= rules["cover_min_width"] or
             int(asset.get("height") or 0) <= rules["cover_min_height"]):
         raise ValueError(f"{rules['label']}封面尺寸不足，请检查平台要求")
+    validate_platform_cover(platform, asset)
+    if platform == "jingdong":
+        first_id = parsed.asset_ids[0] if parsed.asset_ids else None
+        first = {**assets[first_id], "id": first_id} if first_id else None
+        validate_platform_cover(platform, {**asset, "id": cover_id}, first)
     return path
 
 
@@ -317,10 +339,14 @@ async def _submit_once(page, on_submit) -> None:
     await page.wait_for_timeout(3000)
 
 
-async def _verify_final_body(editor, document, platform: str, tags: list[str] | None = None) -> None:
+async def _verify_final_body(editor, document, platform: str, tags: list[str] | None = None,
+                             rich_verifier=None, image_verifier=None, document_reader=None) -> None:
     """封面及话题操作后完整校验正文，仅允许已核实的请求话题后缀。"""
     from utils.articles.browser import normalize_text, is_uploaded_image, body_sequence, inspect_text
-    actual = await body_sequence(editor, platform, include_images=False)
+    # 原生状态读回只替代 DOM 提取，全文、图片数量与顺序的比较仍在本层执行。
+    # 例如 Lexical 的放大镜副本和图片工具栏并不是第二张正文图片或正文文字。
+    state = await document_reader(editor) if document_reader else None
+    actual = state["text"] if state is not None else await body_sequence(editor, platform, include_images=False)
     suffix = ""
     topic_selectors = {
         "baijiahao": 'a[data-bjh-box="topic"]',
@@ -339,15 +365,24 @@ async def _verify_final_body(editor, document, platform: str, tags: list[str] | 
         raise PreparationError("平台选项设置后正文不一致，已阻止发布")
     if any(marker in actual for marker in document.markers):
         raise PreparationError("正文仍有未替换的图片标记，已阻止发布")
-    images = await editor.evaluate("""el=>Array.from(el.querySelectorAll('img')).map(img=>({
+    images = state["images"] if state is not None else await editor.evaluate("""el=>Array.from(el.querySelectorAll('img')).map(img=>({
         src:img.src,ready:img.complete&&img.naturalWidth>0}))""")
-    if len(images) != len(document.image_paths) or not all(is_uploaded_image(item, platform) for item in images):
+    if len(images) != len(document.image_paths) or not all(item["ready"] for item in images):
+        raise PreparationError("正文图片读回不完整，已阻止发布")
+    # 部分官方编辑器始终显示本地预览；仅该平台的专用验证器可用本次
+    # 上传回执及原生素材标识证明持久化，不能全局将 data/blob 当成上传成功。
+    if image_verifier:
+        await image_verifier(editor, images, document)
+    elif not all(is_uploaded_image(item, platform) for item in images):
         raise PreparationError("正文图片读回不完整，已阻止发布")
     if [item["src"] for item in images] != document.uploaded_urls:
         raise PreparationError("正文图片地址或顺序发生变化，已阻止发布")
-    if normalize_text(await body_sequence(editor, platform)) != normalize_text(inspect_text(document.paste_html) + suffix):
+    sequence = state["sequence"] if state is not None else await body_sequence(editor, platform)
+    if normalize_text(sequence) != normalize_text(inspect_text(document.paste_html) + suffix):
         raise PreparationError("正文图片与相邻段落的位置发生变化，已阻止发布")
-    await verify_rich_structure(editor, document.paste_html)
+    # Draft/Braft 的展示 DOM 用 span 样式表达粗体；原生适配器可以校验编辑器
+    # 导出的富文本。可见文字、图片 URL、数量与相邻段落仍须通过上面的统一核验。
+    await (rich_verifier or verify_rich_structure)(editor, document.paste_html)
 
 
 
@@ -390,11 +425,15 @@ class LegacyArticleAdapter:
 
 
 def create_adapter(snapshot, account_file, cover):
-    """显式注册八个平台，新增名称不能意外落入另一平台实现。"""
+    """按实际实现分派；待接入的平台不得进入通用提交或其他平台实现。"""
     from utils.articles.native import create_native_adapter
+    from utils.articles.extended_platforms import EXTENDED_PLATFORMS
+    platform = snapshot.get("platform")
+    if platform in PLATFORMS and PLATFORMS[platform].get("available") is False:
+        raise ValueError(PLATFORMS[platform]["reason"])
     factories = {name: LegacyArticleAdapter for name in ("baijiahao", "zhihu", "toutiao", "sohu")}
     factories.update({name: lambda data, _account, image: create_native_adapter(data, image)
-                      for name in ("douyin", "bilibili", "weibo", "qiehao")})
+                      for name in ("douyin", "bilibili", "weibo", "qiehao", *EXTENDED_PLATFORMS)})
     factory = factories.get(snapshot.get("platform"))
     if factory is None:
         raise ValueError("不支持的文章发布平台")
@@ -410,6 +449,8 @@ async def _run(snapshot, account_file, assets, on_submit, evidence_dir):
     platform = snapshot["platform"]
     cover = validate_task(snapshot, assets)
     adapter = create_adapter(snapshot, account_file, cover)
+    adapter.option_assets = {name: Path(assets[asset_id]["path"])
+                             for name, asset_id in option_asset_ids(platform, snapshot.get("options", {})).items()}
     evidence_dir.mkdir(parents=True, exist_ok=True)
     result = dict(status="failed", message="文章任务未完成", platform_id=None,
                   platform_url=None, platform_status=None, evidence=[], prepared_html=None)
@@ -431,25 +472,29 @@ async def _run(snapshot, account_file, assets, on_submit, evidence_dir):
         document = None
         request_guard = False
         try:
-            context = await browser.new_context(storage_state=storage_state, locale="zh-CN",
+            context = await browser.new_context(storage_state=storage_state, locale="zh-CN", service_workers="block",
                                                 viewport={"width": 1440, "height": 1000})
             if platform != "sohu":
                 context = await set_init_script(context)
             page = await context.new_page()
             render_page = await context.new_page()
+            preparation_guard = getattr(adapter, "install_preparation_guard", None)
+            if preparation_guard:
+                # 个别编辑器需先打开发布设置窗口；平台专属请求保护在导航前生效。
+                await preparation_guard(page)
             if snapshot["mode"] == "preview":
                 request_guard = await install_native_preview_request_guard(page, platform)
-                if not request_guard:
+                if not request_guard and not preparation_guard:
                     await install_preview_guard(page)
             editor = await adapter.open_editor(page)
-            if snapshot["mode"] == "preview" and not request_guard:
+            if snapshot["mode"] == "preview" and not request_guard and not preparation_guard:
                 await install_preview_guard(page)
             await page.bring_to_front()
             # 原生适配器可安排平台专属的准备顺序，最终仍统一读回所有内容。
             prepare_editor = getattr(adapter, "prepare_editor", None)
             if prepare_editor:
                 await prepare_editor(page)
-            if request_guard:
+            if request_guard and not preparation_guard:
                 # 封面准备时请求层已经禁止提交；完成后再禁用编辑器发布按钮。
                 await install_preview_guard(page)
             await adapter.fill_title(page)
@@ -471,12 +516,26 @@ async def _run(snapshot, account_file, assets, on_submit, evidence_dir):
                 page, editor, render_page, snapshot["content_html"], assets, evidence_dir,
                 getattr(conf, "ARTICLE_RENDER_FONT", "Noto Sans CJK SC,PingFang SC,Microsoft YaHei,sans-serif"),
                 on_prepared=remember_prepared,
-                links_as_text=bool((snapshot.get("options") or {}).get("links_as_text")))
-            await insert_body_images(page, editor, render_page, document, platform)
+                links_as_text=bool((snapshot.get("options") or {}).get("links_as_text")),
+                paste_handler=getattr(adapter, "paste_document", None))
+            native_images = getattr(adapter, "insert_body_images", None)
+            if native_images:
+                await native_images(page, editor, render_page, document)
+            else:
+                await insert_body_images(page, editor, render_page, document, platform)
             await adapter.apply_options(page, editor)
+            if snapshot["mode"] == "preview" and preparation_guard:
+                await install_preview_guard(page)
             await adapter.verify_options(page, editor)
             await adapter.verify_title(page)
-            await _verify_final_body(editor, document, platform, snapshot.get("tags") or [])
+            await _verify_final_body(
+                editor, document, platform, snapshot.get("tags") or [],
+                rich_verifier=getattr(adapter, "verify_rich_document", None),
+                image_verifier=getattr(adapter, "verify_uploaded_images", None),
+                document_reader=getattr(adapter, "read_document_state", None))
+            verify_body = getattr(adapter, "verify_body", None)
+            if verify_body:
+                await verify_body(page, editor, document)
             name = await save_screenshot(page, evidence_dir, "prepared.png")
             if name:
                 result["evidence"].append(name)

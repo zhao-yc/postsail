@@ -13,8 +13,23 @@ export const PLATFORM_TYPES = {
   8: '搜狐',
   9: '知乎',
   10: '微博',
-  11: '企鹅号'
+  11: '企鹅号',
+  12: '一点号',
+  13: '大鱼号',
+  14: '网易号',
+  15: 'AcFun',
+  16: '快传号',
+  17: '雪球号',
+  18: '京东',
+  19: '豆瓣',
+  20: 'CSDN',
+  21: '简书',
+  22: '车家号',
+  23: '易车号',
+  24: '懂车号'
 }
+
+export const ACCOUNT_UNAVAILABLE_REASONS = {}
 
 export const useAccountStore = defineStore('account', () => {
   // 存储所有账号信息
@@ -25,7 +40,7 @@ export const useAccountStore = defineStore('account', () => {
     type: item[1],
     filePath: item[2],
     name: item[3],
-    status: item[4] === -1 ? '验证中' : (item[4] === 1 ? '正常' : '异常'),
+    status: ACCOUNT_UNAVAILABLE_REASONS[item[1]] ? '待接入' : (item[4] === -1 ? '验证中' : (item[4] === 1 ? '正常' : '异常')),
     platform: PLATFORM_TYPES[item[1]] || '未知'
   })
 

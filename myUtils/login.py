@@ -671,7 +671,17 @@ async def zhihu_cookie_gen(id, status_queue):
 
 async def article_account_cookie_gen(id, status_queue, platform, account_type):
     """独立文章账号手动登录；正向确认后台再持久化，不触发平台发布。"""
+    import os
+    import sys
     from myUtils.auth import ARTICLE_LOGIN_PROBES, article_account_is_logged_in
+    from utils.platform_accounts import ACCOUNT_PLATFORMS, ACCOUNT_UNAVAILABLE_REASONS
+    if (account_type in ACCOUNT_UNAVAILABLE_REASONS or
+            ACCOUNT_PLATFORMS.get(account_type) != platform or platform not in ARTICLE_LOGIN_PROBES):
+        status_queue.put("500")
+        return False
+    if sys.platform.startswith("linux") and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        status_queue.put("IMPORT_COOKIE")
+        return False
     cookies_dir = Path(BASE_DIR / "cookiesFile")
     cookies_dir.mkdir(exist_ok=True)
     account_file = cookies_dir / f"{platform}_{uuid.uuid4().hex}.json"

@@ -2,7 +2,7 @@
 
 > 一次创作，多端抵达。
 
-**PostSail** 是多平台自媒体内容自动发布工具：提供 **视频 / 图片笔记 / 原生文章** 发布，以及 **Web 管理台**、**统一 CLI（`sau`）** 与 **示例脚本** 三种使用方式。文章已接入抖音、Bilibili、百家号、今日头条、微博、知乎、企鹅号、搜狐号，实际账号验收状态见[文章平台验证记录](./docs/article-platform-verification.md)。
+**PostSail** 是多平台自媒体内容自动发布工具：提供 **视频 / 图片笔记 / 原生文章** 发布，以及 **Web 管理台**、**统一 CLI（`sau`）** 与 **示例脚本** 三种使用方式。文章功能已接入 21 个平台：抖音、Bilibili、百家号、今日头条、微博、知乎、企鹅号、搜狐号、一点号、大鱼号、网易号、AcFun、快传号、雪球号、京东、豆瓣、CSDN、简书、车家号、易车号、懂车号，均具备执行器。代码接入与真实账号验收分别记录，见[文章平台验证记录](./docs/article-platform-verification.md)。
 
 PostSail（播舟）是开源的多平台内容发布与运营工具。Post 表示内容发布，Sail 表示扬帆传播。
 
@@ -38,7 +38,7 @@ PostSail（播舟）是开源的多平台内容发布与运营工具。Post 表�
 - **账号与 Cookie 管理**：Web 扫码 / 导入 Cookie，CLI `login` / `check`
 - **消息中心**：评论与私信收件箱、人工回复、自动回复策略、话术库与消息提醒；按平台和账号权限开放，见[功能与验证范围](./docs/operations.md)
 - **数据中心**：仪表盘、账号与作品快照、观测增量、排行榜、当前负责人汇总、CSV 与机器人周期报表；见[统计口径](./docs/operations.md#数据口径)
-- **定时发布**：原有视频 / 图片笔记按平台支持；八个平台的文章仅立即发布，定时请求明确拒绝
+- **定时发布**：原有视频 / 图片笔记按平台支持；文章仅立即发布，定时请求明确拒绝
 - **统一 CLI**：`sau <platform> <action>`，便于脚本化与 Agent 调用
 - **可扩展 uploader**：每个平台独立模块，便于二开接入新平台
 
@@ -52,7 +52,7 @@ PostSail（播舟）是开源的多平台内容发布与运营工具。Post 表�
 | `sau_frontend/` | Vue3 + Element Plus 管理台（账号 / 素材 / 发布中心 / 文章管理 / 消息中心 / 数据中心） |
 | `uploader/*` | 各平台 Playwright / 专用运行时上传实现 |
 | `sau_cli.py` | 统一 CLI 入口（安装后命令为 `sau`） |
-| `utils/articles/` | 独立文章 API、素材、快照、串行任务与八平台适配器 |
+| `utils/articles/` | 独立文章 API、素材、快照、串行任务与 21 个可执行平台适配器 |
 | `utils/interactions/` | 互动消息、回复审计、自动策略与平台适配器 |
 | `utils/analytics/` | 不可变观测快照、分析查询和机器人周期报表 |
 | `examples/` | 单平台登录 / 上传示例脚本 |
@@ -97,7 +97,7 @@ $env:PLAYWRIGHT_DOWNLOAD_HOST="https://npmmirror.com/mirrors/playwright"
 patchright install chromium
 ```
 
-八平台文章使用 `playwright`。运行文章后端先安装 Web 依赖 `uv pip install -e ".[web]"`；浏览器按显式 `LOCAL_CHROME_PATH`、系统 Chrome、已安装 Playwright Chromium 的顺序选择。需要 Chromium 回退时在后端机器运行：
+文章流程使用 `playwright`。运行文章后端先安装 Web 依赖 `uv pip install -e ".[web]"`；浏览器按显式 `LOCAL_CHROME_PATH`、系统 Chrome、已安装 Playwright Chromium 的顺序选择。需要 Chromium 回退时在后端机器运行：
 
 ```bash
 python -m playwright install chromium
@@ -181,7 +181,7 @@ sau article status BATCH_ID --wait --json
 
 ### 方式 C：examples 脚本
 
-适合调试单平台 uploader。八平台长文章已有独立 API / CLI 与网页管理入口，日常多平台发布优先使用 `sau article` 或「文章管理」；以下历史示例可供排查单平台流程：
+适合调试单平台 uploader。已实现的文章平台共用独立 API / CLI 与网页管理入口，日常多平台发布优先使用 `sau article` 或「文章管理」；以下历史示例可供排查单平台流程：
 
 ```bash
 # 登录示例
@@ -213,11 +213,24 @@ python examples/upload_article_to_baijiahao.py
 | 知乎 | ✅ | ❌ | ✅ | ❌ | ✅ 文章 | ❌ | 文章立即发布 / 可选预览；真实账号尚未验收 |
 | 新浪微博 | ✅ | ❌ | ✅ 头条文章 | ❌ | ✅ 文章 | ❌ | 账号类型 10；文章下一步与最终微博发布分别处理，真实账号尚未验收 |
 | 企鹅号 | ✅ | ❌ | ✅ 文章 | ❌ | ✅ 文章 | ❌ | 账号类型 11；独立于视频号类型 2；真实账号尚未验收 |
+| 一点号 | ✅ | ❌ | ✅ 文章 | ❌ | ✅ 文章 | ❌ | 类型 12；标题 5–64 字、必填封面；真实账号尚未验收 |
+| 大鱼号 | ✅ | ❌ | ✅ 文章 | ❌ | ✅ 文章 | ❌ | 类型 13；UEditor 正文；真实账号尚未验收 |
+| 网易号 | ✅ | ❌ | ✅ 文章 | ❌ | ✅ 文章 | ❌ | 类型 14；Draft.js 正文、必填封面；真实账号尚未验收 |
+| AcFun | ✅ | ❌ | ✅ 文章投稿 | ❌ | ✅ 文章 | ❌ | 类型 15；从会员中心读取原生文章入口、分类必填；真实账号尚未验收 |
+| 快传号 | ✅ | ❌ | ✅ 文章 | ❌ | ✅ 文章 | ❌ | 类型 16；360 快传号文章入口；真实账号尚未验收 |
+| 雪球号 | ✅ | ❌ | ✅ 长文章 | ❌ | ✅ 文章 | ❌ | 类型 17；长文章编辑器；真实账号尚未验收 |
+| 京东 | ✅ | ❌ | ✅ 原生文章 | ❌ | ✅ 文章 | ❌ | 类型 18；京东创作服务平台文章入口；标题 15–27 字，独立封面必填；真实账号尚未验收 |
+| 豆瓣 | ✅ | ❌ | ✅ 日记文章 | ❌ | ✅ 文章 | ❌ | 类型 19；无独立封面；真实账号尚未验收 |
+| CSDN | ✅ | ❌ | ✅ 博客文章 | ❌ | ✅ 文章 | ❌ | 类型 20；封面、标签、摘要与创作类型必填；真实账号尚未验收 |
+| 简书 | ✅ | ❌ | ✅ 文章 | ❌ | ✅ 文章 | ❌ | 类型 21；新建独立稿件，无独立封面及标签；真实账号尚未验收 |
+| 车家号 | ✅ | ❌ | ✅ 原生长文 | ❌ | ✅ 文章 | ❌ | 类型 22；独立横竖封面，须明确同意上传协议；真实账号尚未验收 |
+| 易车号 | ✅ | ❌ | ✅ 文章 | ❌ | ✅ 文章 | ❌ | 类型 23；独立横竖封面、六种声明及转载来源；真实账号尚未验收 |
+| 懂车号 | ✅ | ❌ | ✅ 文章 | ❌ | ✅ 文章 | ❌ | 类型 24；独立横竖封面，正文标题仅支持 H1；真实账号尚未验收 |
 | TikTok | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ | 示例偏 Chrome 版实现 |
 
 平台后台改版、风控、账号权限（如实名）会导致自动化失效，属正常现象，需要跟进维护选择器与流程。
 
-能力表表示代码已接入。文章能力 API 分别返回 `live_verified` 和 `verification.preview/submitted/published`，并公开 `option_fields` 与权限检查说明。2026-10-01 已现场验证抖音的一篇原生文章：标题、完整正文、三张正文图顺序、平台图片地址与高清封面读回通过；正式提交取得官方成功回执及内容 ID，[抖音公开文章](https://www.douyin.com/article/7691535675165871406)已独立打开核实。此次未验收真实原生话题或声明；其余七平台缺少验收账号，保持未验证。具体记录见[文章平台验证记录](./docs/article-platform-verification.md)。
+能力表中的 ✅ 表示代码接入，不表示真实账号验收通过。21 个文章平台均已开放执行，能力 API 分别返回 `live_verified` 和 `verification.preview/submitted/published`，并公开 `option_fields` 与权限检查说明。2026-10-01 已现场验证抖音的一篇原生文章：标题、完整正文、三张正文图顺序、平台图片地址与高清封面读回通过；正式提交取得官方成功回执及内容 ID，[抖音公开文章](https://www.douyin.com/article/7691535675165871406)已独立打开核实。此次未验收真实原生话题或声明；其余 20 个平台缺少验收账号，保持未验证。京东和三个汽车平台补充了官方组件的离线浏览器验证，仍未执行真实账号登录、素材上传或发布，`live_verified:false`。具体记录见[文章平台验证记录](./docs/article-platform-verification.md)。
 
 ## 配置说明
 
@@ -237,7 +250,7 @@ python examples/upload_article_to_baijiahao.py
 | [docs/update.md](./docs/update.md) | 更新说明 |
 | [docs/CLI.md](./docs/CLI.md) | `sau` CLI |
 | [docs/articles.md](./docs/articles.md) | 独立文章管理、API、CLI、任务状态与验收边界 |
-| [docs/article-platform-verification.md](./docs/article-platform-verification.md) | 八平台原生文章入口、公开依据与真实验收状态 |
+| [docs/article-platform-verification.md](./docs/article-platform-verification.md) | 文章平台原生入口、公开依据与逐平台验收状态 |
 | [docs/operations.md](./docs/operations.md) | 消息中心、数据中心、自动回复与周期报表 |
 | [docs/agent-bootstrap.md](./docs/agent-bootstrap.md) | 交给 AI Agent 的启动提示词 |
 | [docs/legacy-web.md](./docs/legacy-web.md) | 历史 Web 与当前文章管理入口的区别 |

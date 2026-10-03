@@ -58,6 +58,7 @@ class NativeArticleAdapter:
                                       for tag in snapshot.get("tags", []) if str(tag).strip("# ")))
         self.options = snapshot.get("options") or {}
         self.cover = Path(cover) if cover else None
+        self.option_assets: dict[str, Path] = {}
         self._submit_started = False
         self._cover_before: set[str] = set()
 
@@ -666,6 +667,24 @@ def create_native_adapter(snapshot: dict, cover: Path | None = None) -> NativeAr
     """显式分派原生文章平台，未知平台不得落入通用发布流程。"""
     adapters = {"douyin": DouyinArticleAdapter, "bilibili": BilibiliArticleAdapter,
                 "weibo": WeiboArticleAdapter, "qiehao": QiehaoArticleAdapter}
+    if snapshot.get("platform") in {"yidian", "dayu", "netease", "kuaichuan"}:
+        from utils.articles.publishers import PUBLISHER_ADAPTERS
+        adapters.update(PUBLISHER_ADAPTERS)
+    elif snapshot.get("platform") in {"acfun", "xueqiu", "douban", "csdn", "jianshu"}:
+        from utils.articles.community import COMMUNITY_ADAPTERS
+        adapters.update(COMMUNITY_ADAPTERS)
+    elif snapshot.get("platform") == "jingdong":
+        from utils.articles.jingdong import JingdongArticleAdapter
+        adapters["jingdong"] = JingdongArticleAdapter
+    elif snapshot.get("platform") == "chejiahao":
+        from utils.articles.chejiahao import ChejiahaoArticleAdapter
+        adapters["chejiahao"] = ChejiahaoArticleAdapter
+    elif snapshot.get("platform") == "yiche":
+        from utils.articles.yiche import YicheArticleAdapter
+        adapters["yiche"] = YicheArticleAdapter
+    elif snapshot.get("platform") == "dongchedi":
+        from utils.articles.dongchedi import DongchediArticleAdapter
+        adapters["dongchedi"] = DongchediArticleAdapter
     adapter = adapters.get(snapshot.get("platform"))
     if adapter is None:
         raise PreparationError("不支持的原生文章平台：" + str(snapshot.get("platform")))

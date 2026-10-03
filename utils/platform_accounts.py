@@ -4,9 +4,24 @@ from utils.articles.platforms import PLATFORMS
 ACCOUNT_PLATFORMS = {
     1: "xiaohongshu", 2: "tencent", 3: "douyin", 4: "kuaishou", 5: "baijiahao",
     6: "bilibili", 7: "toutiao", 8: "sohu", 9: "zhihu", 10: "weibo", 11: "qiehao",
+    12: "yidian", 13: "dayu", 14: "netease", 15: "acfun", 16: "kuaichuan",
+    17: "xueqiu", 18: "jingdong", 19: "douban", 20: "csdn", 21: "jianshu",
+    22: "chejiahao", 23: "yiche", 24: "dongchedi",
 }
 ARTICLE_ACCOUNT_TYPES = frozenset(rules["account_type"] for rules in PLATFORMS.values())
-ARTICLE_ONLY_ACCOUNT_TYPES = frozenset({8, 9, 10, 11})
+ARTICLE_ONLY_ACCOUNT_TYPES = frozenset({8, 9, 10, 11, *range(12, 25)})
+ACCOUNT_UNAVAILABLE_REASONS = {}
+
+ACCOUNT_COOKIE_DOMAINS = {
+    1: ("xiaohongshu.com",), 2: ("channels.weixin.qq.com",), 3: ("douyin.com",),
+    4: ("kuaishou.com",), 5: ("baidu.com",), 6: ("bilibili.com",), 7: ("toutiao.com",),
+    8: ("sohu.com",), 9: ("zhihu.com",), 10: ("weibo.com",), 11: ("qq.com",),
+    12: ("yidianzixun.com",), 13: ("dayu.com",), 14: ("163.com",),
+    15: ("acfun.cn",), 16: ("360kuai.com",), 17: ("xueqiu.com",),
+    18: ("jd.com",), 19: ("douban.com",), 20: ("csdn.net",), 21: ("jianshu.com",),
+    22: ("autohome.com.cn",),
+    23: ("yiche.com",), 24: ("dcdapp.com",),
+}
 
 
 def resolve_account_type(value):
@@ -15,6 +30,7 @@ def resolve_account_type(value):
         raise ValueError("账号平台无效")
     text = str(value).strip().lower()
     aliases = {"bilibili": 6, "b站": 6, "b站专栏": 6, "视频号": 2, "企鹅号": 11, "微博": 10}
+    aliases.update({rules["label"].lower(): rules["account_type"] for rules in PLATFORMS.values()})
     if text in aliases:
         return aliases[text]
     if text in ACCOUNT_PLATFORMS.values():
@@ -33,11 +49,8 @@ def validate_imported_cookie(account_type, payload):
     from utils.articles.session import normalize_article_storage_state
     platform = ACCOUNT_PLATFORMS[account_type]
     state = normalize_article_storage_state(platform, payload)
-    domains = {1: ("xiaohongshu.com",), 2: ("channels.weixin.qq.com",), 3: ("douyin.com",),
-               4: ("kuaishou.com",), 5: ("baidu.com",), 6: ("bilibili.com",), 7: ("toutiao.com",),
-               8: ("sohu.com",), 9: ("zhihu.com",), 10: ("weibo.com",), 11: ("qq.com",)}
-    if not any(cookie["value"] and any(cookie["domain"].lstrip(".") == domain or cookie["domain"].lstrip(".").endswith("." + domain)
-               for domain in domains[account_type]) for cookie in state["cookies"]):
+    if not any(cookie["value"] and any(cookie["domain"].lstrip(".").lower() == domain or cookie["domain"].lstrip(".").lower().endswith("." + domain)
+               for domain in ACCOUNT_COOKIE_DOMAINS[account_type]) for cookie in state["cookies"]):
         raise ValueError("Cookie 文件不含目标平台的有效域名凭据")
     return state
 

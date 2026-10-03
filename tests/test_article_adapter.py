@@ -241,7 +241,7 @@ class ArticleFinalBodyTests(unittest.IsolatedAsyncioTestCase):
     """选项操作后重新校验正文，测试本身不启动浏览器或使用剪贴板。"""
 
     async def verify_readback(self, text, sequence=None, images=None, urls=None,
-                              platform="douyin", tags=None, topics=None):
+                              platform="douyin", tags=None, topics=None, image_verifier=None):
         """仅替代浏览器读回，保持生产比较及拒绝路径不变。"""
         urls = urls or []
         document = PreparedDocument("<p>正文</p>", "<p>正文</p>", "正文",
@@ -251,7 +251,51 @@ class ArticleFinalBodyTests(unittest.IsolatedAsyncioTestCase):
         editor.locator.return_value.evaluate_all = AsyncMock(return_value=topics or [])
         with patch("utils.articles.browser.body_sequence", AsyncMock(side_effect=[text, sequence or text])), \
                 patch("utils.articles.adapter.verify_rich_structure", AsyncMock()):
-            await _verify_final_body(editor, document, platform, tags)
+            await _verify_final_body(editor, document, platform, tags, image_verifier=image_verifier)
+
+    async def test_local_image_preview_requires_native_upload_receipt(self):
+        urls = ["data:image/png;base64,fixture"]
+        images = [{"src": urls[0], "ready": True}]
+        with self.assertRaisesRegex(PreparationError, "图片读回不完整"):
+            await self.verify_readback("正文", images=images, urls=urls)
+        verifier = AsyncMock()
+        await self.verify_readback("正文", images=images, urls=urls, image_verifier=verifier)
+        verifier.assert_awaited_once()
+        verifier.side_effect = PreparationError("未收到本次上传回执")
+        with self.assertRaisesRegex(PreparationError, "本次上传回执"):
+            await self.verify_readback("正文", images=images, urls=urls, image_verifier=verifier)
+
+    async def test_native_upload_verifier_cannot_bypass_image_integrity(self):
+        verifier = AsyncMock()
+        url = "blob:https://mp.yiche.com/fixture"
+        for images, sequence, message in (
+                ([{"src": url, "ready": False}], "正文", "图片读回不完整"),
+                ([{"src": url, "ready": True}] * 2, "正文", "图片读回不完整"),
+                ([{"src": url + "changed", "ready": True}], "正文", "图片地址或顺序"),
+                ([{"src": url, "ready": True}], "正文OMNIPOSTIMAGE0000END", "相邻段落")):
+            with self.subTest(message=message), self.assertRaisesRegex(PreparationError, message):
+                await self.verify_readback("正文", images=images, urls=[url], sequence=sequence,
+                                           image_verifier=verifier)
+
+    async def test_native_document_reader_preserves_shared_final_checks(self):
+        url = "https://car.autoimg.cn/body.png"
+        document = PreparedDocument("", "<p>首段OMNIPOSTIMAGE0000END尾段</p>", "首段尾段",
+                                    [Path("photo.png")], [], [], [url])
+        reader = AsyncMock(return_value={"text": "首段尾段", "sequence": "首段OMNIPOSTIMAGE0000END尾段",
+                                         "images": [{"src": url, "ready": True}]})
+        editor = MagicMock()
+        await _verify_final_body(editor, document, "chejiahao", document_reader=reader,
+                                 rich_verifier=AsyncMock())
+        for field, value, error in (
+                ("text", "首段尾段图片上传失败", "正文不一致"),
+                ("sequence", "OMNIPOSTIMAGE0000END首段尾段", "相邻段落"),
+                ("images", [{"src": url, "ready": True}] * 2, "图片读回不完整"),
+                ("images", [{"src": url + "other", "ready": True}], "图片地址或顺序")):
+            state = dict(reader.return_value)
+            state[field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(PreparationError, error):
+                await _verify_final_body(editor, document, "chejiahao", document_reader=AsyncMock(return_value=state),
+                                         rich_verifier=AsyncMock())
 
     async def test_missing_body_is_rejected(self):
         with self.assertRaisesRegex(PreparationError, "正文不一致"):
@@ -399,6 +443,28 @@ class ArticleLocalBrowserTests(unittest.IsolatedAsyncioTestCase):
                          "正文编辑图片OMNIPOSTIMAGE0000END图片上传失败其他编辑图片末段")
         self.assertIn("编辑图片图片上传失败", await body_sequence(editor, "zhihu"))
 
+    async def test_jingdong_image_toolbar_does_not_hide_body_or_upload_warnings(self):
+        """官方 Braft 的悬停删除图标不属于正文，警告和同名非工具节点必须保留。"""
+        editor = self.page.locator("#editor")
+        await editor.evaluate("""el=>el.innerHTML='<p>首段</p><div class="bf-media"><div class="bf-image">'+
+            '<div class="bf-media-toolbar"><a><span>删除图标</span></a></div>'+
+            '<img src="https://fixture.test/uploaded.png"><span>上传失败</span></div></div>'+
+            '<p class="bf-media-toolbar">正文尾段</p>'""")
+        self.assertEqual(await body_sequence(editor, "jingdong"),
+                         "首段OMNIPOSTIMAGE0000END上传失败正文尾段")
+        self.assertEqual(await body_sequence(editor, "jingdong", include_images=False),
+                         "首段上传失败正文尾段")
+        self.assertIn("删除图标", await body_sequence(editor, "zhihu"))
+
+    async def test_dongchedi_image_counter_does_not_hide_caption_or_warning(self):
+        editor = self.page.locator("#editor")
+        await editor.evaluate("""el=>el.innerHTML='<p>首段</p><div class="pgc-image">'+
+            '<img src="https://fixture.test/uploaded.png"><span class="pgc-img-caption-tip">0/50</span>'+
+            '<span class="pgc-img-caption">图注</span><span>上传失败</span></div><p>尾段</p>'""")
+        self.assertEqual(await body_sequence(editor, "dongchedi"),
+                         "首段OMNIPOSTIMAGE0000END图注上传失败尾段")
+        self.assertIn("0/50", await body_sequence(editor, "zhihu"))
+
     async def test_picture_controls_do_not_hide_image_position(self):
         """图片标记在原来的段落之间，移动节点后顺序读回应产生可见差异。"""
         editor = self.page.locator("#editor")
@@ -456,6 +522,34 @@ class ArticleLocalBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.page.locator("button").evaluate("el=>el.click()")
         await self.page.keyboard.press("ControlOrMeta+Enter")
         self.assertEqual(await self.page.evaluate("window.submissions||0"), 0)
+
+    async def test_preview_blocks_community_publish_controls_and_implicit_submit(self):
+        """豆瓣按钮、原生 submit 与动态控件均不能越过预览，保存草稿仍可用。"""
+        await self.page.set_content('''<form id="article"><button id="note">发布日记</button>
+            <button id="post">发表</button><input id="input" type="submit" value="发表">
+            <button id="aria" aria-label="确认投稿"><span>图标</span></button>
+            <div id="custom">发布</div>
+            <input id="draft" type="button" value="保存草稿"></form><script>
+            window.submissions=0;window.saved=0;
+            document.getElementById('article').addEventListener('click',event=>{
+                if(event.target.id==='draft')window.saved++;else window.submissions++;
+            });
+            document.getElementById('article').addEventListener('submit',event=>{
+                event.preventDefault();window.submissions++;
+            });</script>''')
+        await install_preview_guard(self.page)
+        for control in ("note", "post", "input", "aria"):
+            self.assertTrue(await self.page.locator("#" + control).is_disabled())
+            await self.page.locator("#" + control).dispatch_event("click")
+        await self.page.locator("#custom").dispatch_event("click")
+        await self.page.locator("#article").evaluate("form=>form.requestSubmit()")
+        self.assertEqual(await self.page.evaluate("window.submissions"), 0)
+        await self.page.locator("#draft").click()
+        self.assertEqual(await self.page.evaluate("window.saved"), 1)
+        await self.page.locator("#draft").evaluate("el=>el.setAttribute('value','发布日记')")
+        await self.page.wait_for_function("document.getElementById('draft').disabled")
+        await self.page.locator("#draft").dispatch_event("click")
+        self.assertEqual(await self.page.evaluate("window.saved"), 1)
 
     async def test_preview_init_script_guards_early_events_and_dynamic_buttons(self):
         """页面加载前安装保护，根节点尚未创建时不报错，加载后持续禁用动态按钮。"""

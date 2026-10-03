@@ -1,8 +1,8 @@
 # 独立多平台文章发布
 
-PostSail 接收准备好的原稿，向抖音、B站、百家号、今日头条、微博、知乎、企鹅号、搜狐号分别提交原生文章。抖音使用原生文章，B站使用专栏长图文，微博使用头条文章，企鹅号使用文章创作入口。官网沿用独立流程；文章功能不自动抓取官网，也不依赖官网发布结果。
+PostSail 接收准备好的原稿，向抖音、B站、百家号、今日头条、微博、知乎、企鹅号、搜狐号、一点号、大鱼号、网易号、AcFun、快传号、雪球号、京东、豆瓣、CSDN、简书、车家号、易车号、懂车号这 21 个平台分别提交原生文章，均已开放预览和发布执行器。京东使用创作服务平台的原生文章入口 `https://dr.jd.com/n/publish-article.html`，内容类型为 `style=0`。抖音使用原生文章，B站使用专栏长图文，微博使用头条文章，企鹅号使用文章创作入口。官网沿用独立流程；文章功能不自动抓取官网，也不依赖官网发布结果。
 
-八个平台的代码接入与真实账号验收分别记录。2026-10-01 已现场验证抖音单篇文章的标题、完整正文、三张正文图顺序及高清封面，预览和正式提交均通过，[抖音公开文章](https://www.douyin.com/article/7691535675165871406)已独立打开核实；其余七个平台缺少验收账号。抖音本次未验收真实原生话题或声明，不能据此认定全部专属选项已通过。具体过程、平台限制和证据见[文章平台验证记录](./article-platform-verification.md)。
+平台代码接入与真实账号验收分别记录。2026-10-01 已现场验证抖音单篇文章的标题、完整正文、三张正文图顺序及高清封面，预览和正式提交均通过，[抖音公开文章](https://www.douyin.com/article/7691535675165871406)已独立打开核实；其余 20 个平台缺少验收账号，`live_verified:false`。京东和三个汽车平台补充了官方组件的离线浏览器验证，仍未执行真实账号登录、素材上传或发布。抖音本次未验收真实原生话题或声明，不能据此认定全部专属选项已通过。具体过程、平台限制和证据见[文章平台验证记录](./article-platform-verification.md)。
 
 文章发布使用 Web 后端保存的账号 ID。现有视频 CLI 的账号文件和参数保持不变。先在网页完成目标平台登录，再运行 `sau article accounts --json` 查找可用账号。第一版仅支持立即发布，定时请求会被拒绝，不会回退成立即发布。
 
@@ -88,7 +88,7 @@ sau article asset --url https://example.com/images/cover.png --json
 
 ## 选择账号与平台覆盖项
 
-八个平台标识是 `douyin`、`bilibili`、`baijiahao`、`toutiao`、`weibo`、`zhihu`、`qiehao`、`sohu`。账号 ID 使用 `accounts` 返回的 `id`，不要填 CLI 视频命令中的 `account_name`。
+可执行的平台标识为 `douyin`、`bilibili`、`baijiahao`、`toutiao`、`weibo`、`zhihu`、`qiehao`、`sohu`、`yidian`、`dayu`、`netease`、`acfun`、`kuaichuan`、`xueqiu`、`jingdong`、`douban`、`csdn`、`jianshu`、`chejiahao`、`yiche`、`dongchedi`。调用前检查当前能力接口的 `available` 和 `reason`。账号 ID 使用 `accounts` 返回的 `id`，不要填 CLI 视频命令中的 `account_name`。
 
 ```bash
 sau article accounts --json
@@ -108,8 +108,27 @@ sau article capabilities --json
 | 知乎 `zhihu` | 9 | 文章 | 1–100 | 可选，≤10MB |
 | 企鹅号 `qiehao` | 11 | 文章 | 5–64 | 可选，≤10MB |
 | 搜狐号 `sohu` | 8 | 文章 | 5–72 | 可选，宽高分别大于 450px 和 300px，≤10MB |
+| 一点号 `yidian` | 12 | 文章 | 5–64 | 必填，≤20MB |
+| 大鱼号 `dayu` | 13 | 文章 | 1–50 | 可选，≤20MB |
+| 网易号 `netease` | 14 | 文章 | 1–300（原稿上限） | 必填，≤20MB |
+| AcFun `acfun` | 15 | 文章投稿 | 1–50 | 必填，≤20MB |
+| 快传号 `kuaichuan` | 16 | 文章 | 1–300（原稿上限） | 必填，≤20MB |
+| 雪球号 `xueqiu` | 17 | 长文章 | 9–100 | 可选，≤20MB |
+| 京东 `jingdong` | 18 | 原生文章（`style=0`） | 15–27 | 必填，每任务 1 张，10:7、至少 600×420px、≤5MiB；不能与正文首图为相同素材或相同文件内容 |
+| 豆瓣 `douban` | 19 | 日记文章 | 1–300（原稿上限） | 不支持独立封面 |
+| CSDN `csdn` | 20 | 博客文章 | 1–300（原稿上限） | 必填，≤20MB |
+| 简书 `jianshu` | 21 | 文章 | 1–300（原稿上限） | 不支持独立封面 |
+| 车家号 `chejiahao` | 22 | 原生长文 | 原生加权 6–30 字，英文等半字计数 | 横版 4:3、至少 560×420px；竖版 3:4、宽度至少 560px、高度至少 420px，建议 600×800px；各 ≤10MiB |
+| 易车号 `yiche` | 23 | 文章 | 5–28 | 横版 3:2；竖版 3:4 或 4:3；各 ≤10MiB、宽度 ≤5000px |
+| 懂车号 `dongchedi` | 24 | 文章 | 2–30，至少 2 个汉字 | 横版 4:3、至少 532×399px；竖版 3:4、至少 534×712px；各 ≤20MiB |
 
-封面仅接受 JPEG 或 PNG。微博与企鹅号分别新增类型 `10`、`11`，既有类型不改号；微信视频号仍为类型 `2`。同一 B站账号可供视频和文章使用：视频保留 `biliup` 会话，文章读取时只在内存转换为浏览器会话。标准 Playwright `storage_state` 和 `biliup` JSON 均可通过网页导入，导入会校验结构、目标域名和实际登录状态，不能仅凭 Cookie 存在认定可发布。
+表中的 300 字是 PostSail 原稿标题上限，并非已确认的平台限制；相应能力字段为 `title_limit_confirmed:false`。执行时还会读取标题输入框的实际限制，超过限制会停止，不截断标题。表中的 20MB 封面上限是本版本的素材检查配置，平台页面仍可能有更严格要求。大鱼号与 AcFun 的正文 HTML 上限配置为 50000 字符。
+
+三个汽车平台的约束结合蚁小二文章契约与 2026-10-03 只读取得的官方编辑器脚本；公开源码研究不等于真实账号验收。车家号按原生 UTF-16 码元计数：数值大于 256 计 1 字，其余计半字；标题须为 6–30 字，纯 ASCII 标题对应 12–60 个字符，不要求至少六个汉字。正文使用原生加权 10–100000 字限制，不能将其误写为 HTML 源码长度。易车号正文 HTML 上限配置为 8000 字符，竖封面接受 3:4 或 4:3，比例容差为 0.01，未设置独立的最低像素。三个平台均要求独立横、竖封面，不继承原稿默认 `tags`；尚未开放原生话题处理，不把普通文本作为原生话题。三个原生适配器均已开放执行；真实账号权限与实际发布仍需逐平台验收。
+
+豆瓣、简书不继承原稿的独立封面；显式指定这两个平台的 `cover_asset_id` 会被拒绝，图片请放入正文。一点号、大鱼号、网易号、雪球号、京东和简书不支持独立话题字段，因此不继承原稿默认 `tags`；显式非空覆盖也会被拒绝。CSDN 至少需要一个标签，AcFun 最多一个话题；其余原生选项仍须在实际控件中设置并读回。
+
+封面仅接受 JPEG 或 PNG。微博、企鹅号保留类型 `10`、`11`，此前新增类型 `12`–`21`，三个汽车平台登记类型 `22`–`24`，既有类型不改号；微信视频号仍为类型 `2`。这些新增类型仅用于文章，视频请求会被明确拒绝；类型登记不代表当前账号已取得原生文章权限。无图形窗口的服务器可导入已登录的浏览器会话。京东登录或导入后仍需核实当前账号具有原生文章权限。同一 B站账号可供视频和文章使用：视频保留 `biliup` 会话，文章读取时只在内存转换为浏览器会话。标准 Playwright `storage_state` 和 `biliup` JSON 均可通过网页导入，导入会校验结构、目标域名和实际登录状态，不能仅凭 Cookie 存在认定可发布。
 
 `capabilities` 返回每个平台的 `option_fields`，网页据此展示专属字段，API 和 CLI 使用同一平台定义。主要选项如下：
 
@@ -121,12 +140,39 @@ sau article capabilities --json
 | 今日头条、知乎、搜狐号 | `statement` | 仅接受能力接口列出的声明并读取选中状态 |
 | 微博 | `summary`、`publish_text`、`statement` | 导语最多44字；配套微博文字留空使用文章标题 |
 | 企鹅号 | `category`、`summary`、`statement` | 精确分类候选；摘要与声明必须有可核实的原生控件 |
+| 一点号、大鱼号 | `statement` | 按平台显示的完整声明匹配并读回 |
+| 网易号 | `statement`、`original` | 原生声明与原创开关须核实选中状态 |
+| AcFun | `summary`、`category`、`original`、`source_url` | 摘要最多200字；分类必填；`original:false` 表示不声明原创，不强制填写原文链接 |
+| 快传号 | `original` | 设置原生原创开关并读取状态 |
+| 雪球号 | `visibility`、`statement` | 可见范围为「公开」或「仅自己可见」；声明精确匹配 |
+| 豆瓣 | `original`、`visibility` | 日记原创声明及「公开」/「仅自己可见」 |
+| CSDN | `summary`、`create_type`、`source_url`、`statement` | 摘要、创作类型必填；类型为「原创」/「转载」/「翻译」，后两者必须提供原文链接；选项在发布设置中读回 |
+| 简书 | 无 | 新建独立稿件，确认新稿 ID 后才填写，不覆盖打开的旧稿 |
+| 京东 | `category` | 可选，每任务选择 1 个精确的「一级/二级/三级」分类路径，逐层匹配原生标签类型并读回；不接受普通 `tags` |
 
-文本声明字段不代表任意声明均可用：页面没有精确选项、话题候选没有成为原生选中项、封面仅是本地预览，都会停止为 `needs_action`，不会忽略该选项继续提交。企鹅号出现必填内容自主声明时，需要在平台覆盖项中指定页面显示的声明。账号已登录也可能因未实名、等级、发文额度或文章权限而无法打开编辑器；实际编辑器可用且内容完整读回后才允许继续。
+三个汽车平台支持以下专属覆盖项：
+
+| 平台 | `options` 字段 | 实际处理 |
+| --- | --- | --- |
+| 车家号 | `vertical_cover_asset_id`、`original`、`first_publish`、`links_as_text`、`agree_upload_terms`、`content_type` | 独立竖封面必填；原创、首发及链接转文字须显式设置；必须明确同意上传条款；页面要求时选择「非商业内容」或「商业内容」 |
+| 易车号 | `vertical_cover_asset_id`、`declaration`、`source_url`、`allow_forward`、`allow_abstract` | 独立竖封面必填；声明为「内容无需标注」「含AI生成内容」「含虚构演绎内容」「内容含营销信息」「个人观点，仅供参考」「内容为转载」之一；转载必须填写 HTTP/HTTPS 来源链接；同意转发与生成摘要均默认关闭 |
+| 懂车号 | `vertical_cover_asset_id` | 独立竖封面必填 |
+
+`vertical_cover_asset_id` 是 `type:asset` 的字段，只接受已经上传的素材 ID。先用 `sau article asset --file ./draft/vertical-cover.png --json` 上传，再将返回的 ID 保存到原稿的 `platform_options.<平台>.options.vertical_cover_asset_id`；横版封面仍使用对应的 `cover_asset_id`。服务不会把横封面自动裁剪成竖封面，也不接受服务器文件路径作为素材 ID。原稿的平台默认配置和任务快照都会保护竖封面素材引用，已引用的素材不能删除。执行时会核对本次上传结果、原生表单和可见预览，任一不一致都会停止。
+
+易车号声明以当前原生页面的六个选项为准。早期登记的「不声明」「内容来源网络」「AI生成」「引用站内」不自动映射为新声明；已有原稿或任务需要重新选择对应选项，避免改变原作者声明。`allow_forward` 表示同意转发，`allow_abstract` 表示同意生成摘要，未明确启用时保持关闭。
+
+易车号竖封面通过原生编辑组件保留完整画面；组件可能压缩或缩放图片，不能保证上传后像素尺寸及编码完全不变。系统会核对完整裁剪范围、已生成预览、本次上传回执和提交素材键。
+
+车家号要求用户阅读并明确同意《汽车之家内容上传服务条款》《汽车之家联合共创须知》，对应 `agree_upload_terms:true`，默认关闭。`content_type` 仅接受「非商业内容」或「商业内容」；目标账号出现必选控件时必须提供，不能由系统推断文章属性。
+
+车家号标题不支持 Emoji 等原生控件禁止的特殊符号；英文半字计数不能用于绕过该限制。
+
+文本声明字段不代表任意声明均可用：页面没有精确选项、话题候选没有成为原生选中项、封面仅有本地预览却缺少上传依据，都会停止为 `needs_action`，不会忽略该选项继续提交。企鹅号出现必填内容自主声明时，需要在平台覆盖项中指定页面显示的声明。账号已登录也可能因未实名、等级、发文额度或文章权限而无法打开编辑器；实际编辑器可用且内容完整读回后才允许继续。
 
 文章、素材、批次和任务的 ID 是不透明字符串（当前为 32 位 UUID 十六进制值），账号 ID 和修订号是正整数。命令示例中的 `ARTICLE_ID`、`BATCH_ID`、`TASK_ID`、`ASSET_ID` 均替换为服务返回的实际值。
 
-多个平台推荐使用目标文件。以下 `targets.json` 中的账号和素材 ID 是占位示例，使用前替换为服务实际返回的 ID。
+多个平台推荐使用目标文件。以下 `targets.json` 中的账号和素材 ID 是占位示例，使用前替换为服务实际返回的 ID；分类等平台值也须与目标账号实际页面一致。
 
 ```json
 [
@@ -164,15 +210,87 @@ sau article capabilities --json
       "options": {"summary": "示例导语", "publish_text": "分享一篇教程"}
     }
   },
-  {"platform": "qiehao", "account_id": 9}
+  {"platform": "qiehao", "account_id": 9},
+  {"platform": "yidian", "account_id": 10, "overrides": {"cover_asset_id": "ASSET_ID"}},
+  {
+    "platform": "acfun",
+    "account_id": 11,
+    "overrides": {
+      "cover_asset_id": "ASSET_ID",
+      "tags": [],
+      "options": {"category": "平台实际分类名称", "original": true}
+    }
+  },
+  {
+    "platform": "csdn",
+    "account_id": 12,
+    "overrides": {
+      "cover_asset_id": "ASSET_ID",
+      "tags": ["技术"],
+      "options": {"summary": "介绍工具的实际使用方法。", "create_type": "原创"}
+    }
+  },
+  {"platform": "jianshu", "account_id": 13},
+  {
+    "platform": "jingdong",
+    "account_id": 14,
+    "overrides": {
+      "title": "适合京东原生文章发布的示例标题",
+      "cover_asset_id": "JINGDONG_COVER_ASSET_ID",
+      "options": {"category": "平台实际一级分类/平台实际二级分类/平台实际三级分类"}
+    }
+  },
+  {
+    "platform": "chejiahao",
+    "account_id": 15,
+    "overrides": {
+      "cover_asset_id": "CHEJIAHAO_HORIZONTAL_ASSET_ID",
+      "options": {
+        "vertical_cover_asset_id": "CHEJIAHAO_VERTICAL_ASSET_ID",
+        "agree_upload_terms": true,
+        "original": false,
+        "first_publish": false,
+        "content_type": "非商业内容"
+      }
+    }
+  },
+  {
+    "platform": "yiche",
+    "account_id": 16,
+    "overrides": {
+      "cover_asset_id": "YICHE_HORIZONTAL_ASSET_ID",
+      "options": {
+        "vertical_cover_asset_id": "YICHE_VERTICAL_ASSET_ID",
+        "declaration": "内容无需标注",
+        "allow_forward": false,
+        "allow_abstract": false
+      }
+    }
+  },
+  {
+    "platform": "dongchedi",
+    "account_id": 17,
+    "overrides": {
+      "cover_asset_id": "DONGCHEDI_HORIZONTAL_ASSET_ID",
+      "options": {"vertical_cover_asset_id": "DONGCHEDI_VERTICAL_ASSET_ID"}
+    }
+  }
 ]
 ```
+
+汽车平台示例中的声明和内容属性须按实际文章选择；车家号的 `agree_upload_terms:true` 仅在用户已阅读并同意对应协议时设置。各平台封面比例不同，示例使用不同素材 ID。
 
 原稿的 `platform_options` 也可保存平台默认值：其 JSON 对象按平台名分组，每组使用与 `overrides` 相同的字段。命令 `import/update --platform-options platform-options.json` 保存默认值，某次发布的目标 `overrides` 覆盖该平台默认值。原稿正文始终保留，不自动改写。
 
 标题、封面、话题和声明要求通过能力接口和平台实际页面共同检查。标题过长不会静默截断；一个账号检查失败，其他目标继续执行。普通标题、加粗、列表、引用、正文图片按原稿顺序准备；平台无法可靠保留的表格和代码块转为清晰图片，原稿仍保留可编辑内容。
 
-抖音当前原生文章编辑器不接受正文超链接，会生成不支持素材提示。默认含超链接的任务明确停止；仅当平台 `options.links_as_text:true` 时，将链接转为「原文字（完整网址）」供平台填写，保留原稿，转换稿记录于任务 `prepared_html`。这属于显式选择的平台格式转换，不能把没有点击链接能力的转换稿当成保留了原生链接。其余平台继续检查链接文字和目标地址，任何格式丢失都不能仅因粘贴成功而标记预览完成。
+抖音当前原生文章编辑器不接受正文超链接，会生成不支持素材提示；车家号当前 Lexical 编辑器会移除链接。两者默认遇到含超链接的任务均停止；仅当对应平台 `options.links_as_text:true` 时，将链接转为「原文字（完整网址）」供平台填写，保留原稿，转换稿记录于任务 `prepared_html`。这属于显式选择的平台格式转换，不能把没有点击链接能力的转换稿当成保留了原生链接。其余平台继续检查链接文字和目标地址，任何格式丢失都不能仅因粘贴成功而标记预览完成。
+
+京东每任务使用 1 张独立封面，素材 ID 或文件哈希与正文首图相同都会被拒绝。正文图片（包括表格、代码块转换生成的 PNG）要求宽高均至少300px、单张不超过5MiB；尺寸不足时停止为 `needs_action`，不自动放大原图。含超链接的正文仅在当前账号显示原生「超链接」工具时允许导入，缺少该控件时停止。正文通过编辑器公开 API 和正常回调导入，并同时核对可见内容与原生发布正文序列化结果；任一侧丢失文本或格式都不能继续提交。平台按账号或频道返回的动态限制和必填字段仍须在当前页面检查。
+
+懂车号当前原生编辑器只保留一级正文标题（H1）；包含 H2–H6 的原稿会明确拒绝。可在网页编辑器中主动改为 H1 或普通段落，再保存新修订；系统不会自动合并标题层级，也不会把这些标题转成图片。原生正文去空白后最多 50000 个 UTF-16 码元，原生 HTML 最多 60000 个码元，上传后仍按实际序列化结果检查。表格与代码块仍按通用规则转换为图片并检查实际读回。
+
+懂车号先设置用户指定的双封面，再填写标题和正文，以免平台把正文首图自动设为封面；提交前再次核对两张封面。作品同步授权窗口仅按原生关闭操作拒绝本次额外同步，不授权同步到其他平台，也不修改永久偏好。
 
 抖音先设置封面，再填写标题和正文，避免标题引起的预览重绘与封面图层合成相互干扰。封面保存前等待真实分辨率、裁剪背景与文字两层生成图解码，完成只点一次；明确失败提示会停止，只有新的平台 CDN 封面读回才算准备成功。这一顺序已经通过本轮完整真实预览，不能替代原生话题和声明的独立验收。
 
@@ -227,6 +345,8 @@ sau article resolve TASK_ID --resolution not_published --note "已核对平台�
 
 抖音正式任务在记录提交边界之前安装被动响应监听，只读取浏览器真实产生的 `POST /web/api/media/aweme/create_v2/` 回执，不主动调用发布接口。请求必须属于 `item.common.media_type=43` 的原生文章；HTTP 2xx、响应根字段 `status_code` 为数值 `0` 且 `item_id` 为有效正整数字符串时，记录为 `submitted` 并保留内容 ID。其他状态码或未知格式继续按页面证据核对；响应解析尚未完成时等待，不重复发布。接口接收不表示审核通过，不凭内容 ID 拼接公开链接或标记 `published`。
 
+京东预览在打开文章页面前安装发布与保存草稿保护，正式提交只点击一次原生「发布」。官方“发布成功，等待审核！”属于 `submitted`，不等于公开发表；仅跳转到内容列表也可能是保存草稿，不能作为发布成功依据。账号出现验证码或提交结果不明确时不会再次点击。
+
 ## API 约定
 
 所有 JSON 使用 `snake_case`，统一响应格式为：
@@ -244,8 +364,8 @@ sau article resolve TASK_ID --resolution not_published --note "已核对平台�
 | `GET /api/articles` | 最近修改的原稿列表，最多 500 条；CLI 的 `--limit` 在客户端限制展示数量 |
 | `GET /api/articles/{id}` | 原稿及清理后的 `content_html`、修订号 |
 | `PATCH /api/articles/{id}` | 原稿字段及必须的 `expected_revision`；修订冲突拒绝更新 |
-| `GET /api/article-accounts` | 八个平台的已有账号，含 `id,platform,user_name,status`，不返回 Cookie 路径；CLI 在客户端按 `--platform` 筛选 |
-| `GET /api/article-capabilities` | `data={"platforms":[...]}`；标题、封面、格式、`option_fields`、`permission_check`、`verification`、`scheduled` 与 `live_verified` |
+| `GET /api/article-accounts` | 已登记文章平台的已有账号，含 `id,platform,user_name,status`，不返回 Cookie 路径；CLI 在客户端按 `--platform` 筛选 |
+| `GET /api/article-capabilities` | `data={"platforms":[...]}`；标题、封面、格式、`option_fields`、`permission_check`、`verification`、`scheduled` 与 `live_verified`；新增平台还公开 `available`、`reason`、`title_limit_confirmed`、`cover_supported` 等约束；`available:false` 的平台不能执行预览或发布，`type:asset` 的选项使用已上传素材 ID |
 | `POST /api/articles/{id}/publish` | `revision,targets,mode,idempotency_key`；返回批次与各账号任务 |
 | `GET /api/article-publish-batches/{id}` | 批次、各账号状态、错误、截图和平台链接 |
 | `GET /api/article-publish-batches?article_id={id}` | 查询某一原稿的批次记录；省略参数则查询全部近期批次 |
@@ -277,13 +397,15 @@ sau article resolve TASK_ID --resolution not_published --note "已核对平台�
 
 ## 存储与迁移
 
-SQLite 通过增量建表增加 `articles`、`article_assets`、`article_asset_refs`、`article_publish_batches`、`article_publish_tasks` 和 `article_worker_lease`，保留已有账号与视频素材。`article_asset_refs` 分别保护原稿、平台默认封面和任务快照引用，不能只删除图片文件而不处理数据库引用。
+SQLite 通过增量建表增加 `articles`、`article_assets`、`article_asset_refs`、`article_publish_batches`、`article_publish_tasks` 和 `article_worker_lease`，保留已有账号与视频素材。`article_asset_refs` 分别保护原稿、平台默认封面、平台选项中的竖封面和任务快照引用，不能只删除图片文件而不处理数据库引用。
 
 默认图片和证据位于 `articleData/`（`assets/`、`evidence/`）；这些目录与 `db/database.db`、`cookiesFile/` 一起备份和迁移。备份前停止后台发布，避免正在提交的任务跨机器重复执行。素材文件按当前配置目录和素材 ID 定位，数据库保存文件名；迁移到另一目录后按新项目目录运行，或同步 Flask 的 `ARTICLE_ASSET_DIR` 等目录配置，不需要改写数据库绝对路径。必须连同素材文件迁移，不能只复制数据库。备份包含账号会话和发布内容，不能提交到公开仓库。账号 API 仅提供公共账号信息，不暴露 Cookie 内容或服务器路径。
 
 ## 验证范围
 
-本次八平台接入包含离线及受控浏览器验证；这些验证不能替代真实平台结果。仓库中的验证范围如下：
+文章接入包含离线及受控浏览器验证；这些验证不能替代真实平台结果。仓库中的验证范围如下：
+
+2026-10-03 最终完整回归开启受控浏览器测试，589 项全部通过、无跳过；另行运行的 83 项共享专项、前端生产构建、运行服务的 21 平台能力回读及网页流程检查均通过。
 
 | 验证层 | 实际验证内容 |
 | --- | --- |
@@ -291,8 +413,8 @@ SQLite 通过增量建表增加 `articles`、`article_assets`、`article_asset_r
 | 浏览器适配 | 本地 Chrome 受控页面；富文本粘贴、原生表格 / 代码、PNG 回退、长块分段、图片上传和错位阻止、标题 / 声明 / 话题读回、预览禁止提交 |
 | 原生文章提交边界 | 受控 mock；未知平台拒绝、歧义按钮拒绝、持久化失败不点击、点击异常不重试、微博下一步 / 最终发布分别处理、默认配套微博文字读回 |
 | 网页 | 隔离后端与假账号；保存刷新、正文图 / 封面、留空继承、重复点击、失败隔离、宽窄屏布局与浏览器错误检查 |
-| 兼容性 | 现有视频 CLI、账号登录相关自动测试；已有账号和视频素材表增量升级后保留 |
-| 真实平台 | 抖音完整真实预览通过：标题、正文三图顺序、完整正文、平台 CDN 图片与高清封面均已读回，`submit_started=0`；正式发布已取得明确提交回执，公开文章已现场核实。未验收真实话题或声明；其他七平台缺少验收账号 |
+| 兼容性 | 现有视频 CLI、账号登录相关自动测试；新增账号类型、官方域名边界、正向会话证据、文章账号拒绝视频请求、京东会话和文章权限边界及旧数据保留 |
+| 真实平台 | 抖音完整真实预览通过：标题、正文三图顺序、完整正文、平台 CDN 图片与高清封面均已读回，`submit_started=0`；正式发布已取得明确提交回执，公开文章已现场核实。未验收真实话题或声明；其他 20 个平台缺少验收账号；京东与三个汽车平台另有官方源码和离线浏览器组件回读证据，均未完成真实登录、上传或发布 |
 
 能力接口的 `live_verified` 与 `verification.preview/submitted/published` 分别记录验收范围；实际返回值以运行版本为准，真实任务证据见验证记录。代码中存在选择器、真实编辑器打开、受控测试通过，都不能直接认定真实提交或公开发表。逐平台最新结果见[文章平台验证记录](./article-platform-verification.md)。单个平台通过不代表其余平台通过，也不代表 Windows、macOS、Linux 全部通过。[可复用验收稿](../tests/fixtures/article-acceptance/README.md)包含三张正文图片、封面、表格及代码块，标题明确标注测试用途。
 
@@ -300,10 +422,11 @@ SQLite 通过增量建表增加 `articles`、`article_assets`、`article_asset_r
 
 ```bash
 python -m unittest discover -s tests -v
-python -m unittest tests.test_native_articles -v
+python -m unittest tests.test_native_articles tests.test_extended_article_accounts -v
 # 可选本地 Chrome 模拟测试，仅访问受控测试页面。
 # Linux / macOS：
 OMNIPOST_BROWSER_TESTS=1 python -m unittest tests.test_article_adapter -v
+OMNIPOST_BROWSER_TESTS=1 python -m unittest tests.test_chejiahao_articles tests.test_yiche_articles tests.test_dongchedi_articles -v
 # Windows PowerShell：
 $env:OMNIPOST_BROWSER_TESTS="1"; python -m unittest tests.test_article_adapter -v
 ```

@@ -10,7 +10,7 @@ from pathlib import Path
 from queue import Queue
 from flask_cors import CORS
 from myUtils.auth import check_cookie
-from utils.platform_accounts import ACCOUNT_PLATFORMS, ARTICLE_ACCOUNT_TYPES, ARTICLE_ONLY_ACCOUNT_TYPES, resolve_account_type, validate_imported_cookie, validate_bilibili_cookie_replacement
+from utils.platform_accounts import ACCOUNT_PLATFORMS, ARTICLE_ACCOUNT_TYPES, ARTICLE_ONLY_ACCOUNT_TYPES, ACCOUNT_UNAVAILABLE_REASONS, resolve_account_type, validate_imported_cookie, validate_bilibili_cookie_replacement
 from utils.articles.model import ArticleError
 from utils.articles.routes import register_article_routes
 from utils.interactions.routes import register_interaction_routes
@@ -18,7 +18,7 @@ from utils.analytics.routes import register_analytics_routes
 from utils.analytics.push import register_analytics_push_routes
 from flask import Flask, request, jsonify, Response, render_template, send_from_directory
 from conf import BASE_DIR
-from myUtils.login import get_tencent_cookie, douyin_cookie_gen, get_ks_cookie, xiaohongshu_cookie_gen, baijiahao_cookie_gen, bilibili_cookie_gen, toutiao_cookie_gen, sohu_cookie_gen, zhihu_cookie_gen, weibo_cookie_gen, qiehao_cookie_gen
+from myUtils.login import get_tencent_cookie, douyin_cookie_gen, get_ks_cookie, xiaohongshu_cookie_gen, baijiahao_cookie_gen, bilibili_cookie_gen, toutiao_cookie_gen, sohu_cookie_gen, zhihu_cookie_gen, weibo_cookie_gen, qiehao_cookie_gen, article_account_cookie_gen
 from myUtils.postVideo import post_video_tencent, post_video_DouYin, post_video_ks, post_video_xhs, post_video_baijiahao, post_video_bilibili, post_video_toutiao, post_article_toutiao, post_article_baijiahao, post_article_sohu, post_article_zhihu
 from uploader.douyin_uploader.content_stats import (
     DouyinStatsSyncError,
@@ -330,6 +330,8 @@ async def getValidAccounts():
         for row in rows:
             print(row)
         for row in rows_list:
+            if row[1] in ACCOUNT_UNAVAILABLE_REASONS:
+                continue
             flag = await check_cookie(row[1],row[2])
             new_status = 1 if flag else 0
             row[4] = new_status
@@ -472,12 +474,14 @@ def delete_account():
 # SSE 登录接口
 @app.route('/login')
 def login():
-    # 原 1—9 类型兼容；10 微博，11 企鹅号，2 始终是微信视频号。
+    # 原有类型兼容，新增文章账号独立编号；2 始终是微信视频号。
     type = request.args.get('type')
     # 账号名
     id = request.args.get('id')
     try:
         type = str(resolve_account_type(type))
+        if int(type) in ACCOUNT_UNAVAILABLE_REASONS:
+            raise ValueError(ACCOUNT_UNAVAILABLE_REASONS[int(type)])
     except ValueError as exc:
         return jsonify({"code": 400, "msg": str(exc), "data": None}), 400
     if not isinstance(id, str) or not id.strip() or len(id) > 100:
@@ -506,7 +510,7 @@ def _is_article_request(data):
     if not isinstance(data, dict):
         return False
     try:
-        platform_type = int(data.get('type'))
+        platform_type = resolve_account_type(data.get('type'))
     except (TypeError, ValueError):
         return False
     return platform_type in ARTICLE_ONLY_ACCOUNT_TYPES or (platform_type in ARTICLE_ACCOUNT_TYPES and str(data.get('contentType', '')).strip().lower() == 'article')
@@ -523,14 +527,17 @@ def _validate_publish_capability(data):
     mode = str(data.get("contentType") or "").strip().lower()
     if mode == "article" and kind not in ARTICLE_ACCOUNT_TYPES:
         raise ArticleError("该账号平台不支持统一文章发布")
-    if mode == "video" and kind in {10, 11}:
-        raise ArticleError("微博与企鹅号账号当前仅支持文章发布")
+    if mode == "video" and kind in ARTICLE_ONLY_ACCOUNT_TYPES:
+        raise ArticleError("该账号平台当前仅支持文章发布")
+    if kind in ACCOUNT_UNAVAILABLE_REASONS:
+        raise ArticleError(ACCOUNT_UNAVAILABLE_REASONS[kind])
 
 
 def _submit_legacy_article(data):
     """保留旧响应结构，同时返回批次 ID，供旧管理台查询真实结果。"""
     try:
-        batch = app.extensions['legacy_article_publish'](data)
+        normalized = {**data, "type": resolve_account_type(data.get("type"))}
+        batch = app.extensions['legacy_article_publish'](normalized)
         return jsonify({"code": 200, "msg": "文章任务已受理，请查看各平台实际结果",
                         "data": {**batch, "batchId": batch['id']}}), 200
     except ArticleError as exc:
@@ -861,7 +868,8 @@ def postVideoBatch():
     for data in data_list:
         if _is_article_request(data):
             try:
-                article_batches.append(app.extensions['legacy_article_publish'](data))
+                normalized = {**data, "type": resolve_account_type(data.get("type"))}
+                article_batches.append(app.extensions['legacy_article_publish'](normalized))
             except ArticleError as exc:
                 return jsonify({"code": exc.status, "msg": str(exc), "data": {"batches": article_batches}}), exc.status
             continue
@@ -1031,6 +1039,8 @@ def _import_account_cookie(create_new=False):
         if uploaded is None or not uploaded.filename or not uploaded.filename.lower().endswith(".json"):
             raise ValueError("请上传 JSON 格式的 Cookie 文件")
         account_type = resolve_account_type(request.form.get("platform"))
+        if account_type in ACCOUNT_UNAVAILABLE_REASONS:
+            raise ValueError(ACCOUNT_UNAVAILABLE_REASONS[account_type])
         root = Path(BASE_DIR / "cookiesFile").resolve()
         root.mkdir(parents=True, exist_ok=True)
         database = Path(BASE_DIR / "db" / "database.db")
@@ -1456,6 +1466,9 @@ def push_content_stats_to_dingtalk():
 def run_async_function(type,id,status_queue):
     print(f"🧵 登录线程启动: type={type}, id={id}", flush=True)
     try:
+        if str(type).isdigit() and int(type) in ACCOUNT_UNAVAILABLE_REASONS:
+            status_queue.put("500")
+            return
         match str(type):
             case '1':
                 loop = asyncio.new_event_loop()
@@ -1506,6 +1519,9 @@ def run_async_function(type,id,status_queue):
                 asyncio.run(weibo_cookie_gen(id, status_queue))
             case '11':
                 asyncio.run(qiehao_cookie_gen(id, status_queue))
+            case kind if kind.isdigit() and int(kind) in ARTICLE_ONLY_ACCOUNT_TYPES:
+                account_type = int(kind)
+                asyncio.run(article_account_cookie_gen(id, status_queue, ACCOUNT_PLATFORMS[account_type], account_type))
             case _:
                 print(f"❌ 不支持的登录平台类型: {type}", flush=True)
                 status_queue.put("500")

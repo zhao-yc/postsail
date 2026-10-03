@@ -24,9 +24,21 @@ class ArticleAccountTests(unittest.TestCase):
         self.assertEqual(resolve_account_type("tencent"), 2)
         self.assertEqual(resolve_account_type("qiehao"), 11)
         self.assertEqual(resolve_account_type("weibo"), 10)
-        self.assertEqual(ARTICLE_ACCOUNT_TYPES, {3, 5, 6, 7, 8, 9, 10, 11})
+        self.assertEqual(ARTICLE_ACCOUNT_TYPES, {3, 5, 6, 7, 8, 9, 10, 11, *range(12, 25)})
         with self.assertRaises(ValueError):
             resolve_account_type(True)
+
+    def test_new_article_names_labels_and_numbers_resolve_to_same_type(self):
+        """导入界面的中文名称与 CLI 英文平台标识指向相同账号类型。"""
+        platforms = [("yidian", "一点号", 12), ("dayu", "大鱼号", 13), ("netease", "网易号", 14),
+                     ("acfun", "AcFun", 15), ("kuaichuan", "快传号", 16), ("xueqiu", "雪球号", 17),
+                     ("jingdong", "京东", 18), ("douban", "豆瓣", 19), ("csdn", "CSDN", 20),
+                     ("jianshu", "简书", 21), ("chejiahao", "车家号", 22),
+                     ("yiche", "易车号", 23), ("dongchedi", "懂车号", 24)]
+        for name, label, kind in platforms:
+            for value in (name, label, kind, str(kind)):
+                with self.subTest(value=value):
+                    self.assertEqual(resolve_account_type(value), kind)
 
     def test_biliup_conversion_does_not_change_source_or_tokens(self):
         payload = {"cookie_info": {"cookies": [{"name": "SESSDATA", "value": "测试值"}]},
