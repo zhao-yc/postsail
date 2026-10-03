@@ -457,6 +457,19 @@ class ArticleLocalBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.page.keyboard.press("ControlOrMeta+Enter")
         self.assertEqual(await self.page.evaluate("window.submissions||0"), 0)
 
+    async def test_wechat_cursor_separator_is_not_a_body_image(self):
+        """只排除已核实的公众号编辑器占位图，额外原图仍会阻止提交。"""
+        editor = self.page.locator("#editor")
+        await editor.evaluate("el=>el.innerHTML='<p>正文<img class=ProseMirror-separator></p>'")
+        document = PreparedDocument("<p>正文</p>", "<p>正文</p>", "正文", [], [], [])
+        await _verify_final_body(editor, document, "wechat")
+        self.assertEqual(await body_sequence(editor, "wechat"), "正文")
+        with self.assertRaisesRegex(PreparationError, "正文图片"):
+            await _verify_final_body(editor, document, "zhihu")
+        await editor.evaluate("el=>el.insertAdjacentHTML('beforeend','<img src=https://fixture.test/uploaded.png>')")
+        with self.assertRaisesRegex(PreparationError, "正文图片"):
+            await _verify_final_body(editor, document, "wechat")
+
     async def test_preview_init_script_guards_early_events_and_dynamic_buttons(self):
         """页面加载前安装保护，根节点尚未创建时不报错，加载后持续禁用动态按钮。"""
         errors = []

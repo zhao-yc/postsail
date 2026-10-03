@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 
 class PreparationError(RuntimeError):
@@ -340,6 +341,8 @@ async def body_sequence(editor, platform: str | None = None, *, include_images: 
             if(node.nodeType!==Node.ELEMENT_NODE)return;
             // 抖音图片节点内的编辑按钮不是正文，不屏蔽其它按钮或警告文字。
             if(options.platform==='douyin' && node.matches('.node-image button[title="编辑图片"]')) return;
+            // 公众号 ProseMirror 使用内部占位图支撑光标，它不是用户正文图片。
+            if(options.platform==='wechat' && node.matches('img.ProseMirror-separator')) return;
             if(node.tagName==='IMG'){
                 if(options.includeImages)out+='OMNIPOSTIMAGE'+String(index++).padStart(4,'0')+'END';return;
             }
@@ -391,9 +394,10 @@ async def insert_body_images(page, editor, render_page, document: PreparedDocume
         uploaded = False
         for _ in range(40):
             state = await editor.evaluate(
-                """el => Array.from(el.querySelectorAll('img')).map(img=>({
+                """(el, platform) => Array.from(el.querySelectorAll('img'))
+                    .filter(img=>platform!=='wechat'||!img.classList.contains('ProseMirror-separator')).map(img=>({
                     src:img.src||'',width:img.naturalWidth,
-                    ready:img.complete && img.naturalWidth>0}))""")
+                    ready:img.complete && img.naturalWidth>0}))""", platform)
             if len(state) == index + 1 and all(is_uploaded_image(item, platform) for item in state):
                 if [item["src"] for item in state[:-1]] != document.uploaded_urls:
                     raise PreparationError("平台改变了已上传正文图片的顺序，已阻止发布")
@@ -421,6 +425,15 @@ IMAGE_HOST_SUFFIXES = {
     "zhihu": ("zhimg.com", "zhihu.com"),
     "toutiao": ("byteimg.com", "toutiaoimg.com", "toutiao.com", "pstatp.com", "ibytedtos.com", "bytecdn.cn"),
     "sohu": ("itc.cn", "sohu.com", "sohucs.com", "s3img.com"),
+    "xiaohongshu": ("xhscdn.com", "xiaohongshu.com", "xhsimg.com"),
+    "kuaishou": ("ksapisrv.com", "kwaicdn.com", "kuaishouzt.com", "kuaishou.com", "yximgs.com",
+                  "kwai.net", "ksyuncdn.com", "gifshow.com"),
+    "tencent": ("qpic.cn", "qlogo.cn", "wxapp.tc.qq.com"),
+    "wechat": ("mmbiz.qpic.cn", "mmbiz.qlogo.cn"),
+    "jd": ("360buyimg.com",),
+    "xiaohongshu_merchant": ("xhscdn.com", "xiaohongshu.com", "xhsimg.com"),
+    "dongchedi": ("byteimg.com", "pstatp.com", "ibytedtos.com", "dcdapp.com", "dongchedi.com"),
+    "taobao": ("alicdn.com",),
 }
 
 
@@ -437,6 +450,41 @@ def is_uploaded_image(item: dict, platform: str | None = None) -> bool:
 
 async def install_native_preview_request_guard(page, platform: str) -> bool:
     """已核实的原生提交入口直接阻断；保护生效后可延后修改平台编辑器 DOM。"""
+    if platform == "jd":
+        async def guard_jd(route):
+            request = route.request
+            url = urlparse(request.url)
+            function_ids = parse_qs(url.query).get("functionId", [])
+            function_ids.append(url.path.rstrip("/").rsplit("/", 1)[-1])
+            body = request.post_data or ""
+            if body:
+                function_ids.extend(parse_qs(body).get("functionId", []))
+                try:
+                    payload = json.loads(body)
+                except (ValueError, TypeError):
+                    payload = None
+                if isinstance(payload, dict):
+                    function_ids.append(payload.get("functionId"))
+            if "articlePublishImageText" in function_ids:
+                await route.abort("blockedbyclient")
+            else:
+                await route.continue_()
+
+        await page.route(re.compile(r"^https://(?:api\.m|dr|dr-new|creator)\.jd\.com/"), guard_jd)
+        return True
+    if platform == "wechat":
+        # 公众号存草稿与发表使用不同 action，但都可能写入内容。
+        # 预览阻断这些写请求；文章/图片读取以及上传仍按编辑器流程执行。
+        endpoint = re.compile(r"^https://mp\.weixin\.qq\.com/cgi-bin/(?:masssend|masssendmsg|freepublish|appmsgpublish|operate_appmsg)(?:[/?]|$)")
+
+        async def guard_wechat(route):
+            if route.request.method.upper() in {"GET", "HEAD", "OPTIONS"}:
+                await route.continue_()
+            else:
+                await route.abort("blockedbyclient")
+
+        await page.route(endpoint, guard_wechat)
+        return True
     if platform != "douyin":
         return False
     endpoint = re.compile(r"^https://creator\.douyin\.com/web/api/media/aweme/create_v2/(?:\?.*)?$")
@@ -460,7 +508,7 @@ async def install_preview_guard(page) -> None:
 
 _PREVIEW_GUARD = """(() => {
     if(window.__omnipostPreviewGuard)return;window.__omnipostPreviewGuard=true;
-    const isPublish=el=>el && /^(?:(?:立即|确认|确定|定时)?(?:发布|投稿)(?:文章|图文)?|提交审核|提交发布)$/.test((el.innerText||el.textContent||'').trim());
+    const isPublish=el=>el && /^(?:(?:立即|确认|确定|定时)?(?:(?:发布|投稿)(?:文章|图文)?|发表|群发)|提交审核|提交发布|预览并发布|发表并群发|群发给所有用户)$/.test((el.innerText||el.textContent||'').trim());
     const guard=event=>{let el=event.target;while(el&&el!==document.body){
         if(isPublish(el)){event.preventDefault();event.stopImmediatePropagation();return;}
         el=el.parentElement;}};
@@ -493,7 +541,7 @@ _EXTERNAL_RECEIPT_TEXTS = """elements => elements.filter(el=> {
 def receipt_status(text: str) -> str | None:
     """只识别开头的明确结果句；“发布成功后请……”等说明不是回执。"""
     text = re.sub(r"^[✅✔✓√\ufe0f\s]+", "", text or "").strip()
-    matched = re.match(r"^(?:文章|内容)?(?:已)?(发布成功|提交成功|审核中|等待审核|发布失败|审核不通过|内容违规|提交失败)(?=[。！!，,；;：:\n]|$)", text)
+    matched = re.match(r"^(?:文章|内容|笔记|图文)?(?:已)?(发布成功|发表成功|提交成功|审核中|等待审核|发布失败|发表失败|审核不通过|内容违规|提交失败)(?=[。！!，,；;：:\n]|$)", text)
     return matched.group(1) if matched else None
 
 
@@ -534,7 +582,7 @@ async def read_result_evidence(page, platform: str, expected_title: str = "") ->
     # 标题原稿恰好叫“发布成功”时也不能把它当平台回执。
     signals = feedback_statuses + [receipt_status(text) for text in headings
                                    if text.strip() != expected_title.strip()]
-    for term in ("发布失败", "审核不通过", "内容违规", "提交失败"):
+    for term in ("发布失败", "发表失败", "审核不通过", "内容违规", "提交失败"):
         if term in feedback_statuses:
             return {"status": "failed", "message": f"平台反馈：{term}", "platform_status": term}
     patterns = {
@@ -546,13 +594,19 @@ async def read_result_evidence(page, platform: str, expected_title: str = "") ->
         "baijiahao": r"^https://baijiahao\.baidu\.com/s\?[^#]*\bid=(\d+)",
         "toutiao": r"^https://(?:www\.)?toutiao\.com/article/(\d+)(?:[/?#]|$)",
         "sohu": r"^https://(?:www\.)?sohu\.com/a/(\d+_\d+)(?:[/?#]|$)",
+        "wechat": r"^https://mp\.weixin\.qq\.com/s/([A-Za-z0-9_-]+)(?:[/?#]|$)",
+        "xiaohongshu": r"^https://(?:www\.)?xiaohongshu\.com/(?:explore|discovery/item)/([A-Za-z0-9]+)(?:[/?#]|$)",
+        "kuaishou": r"^https://(?:www\.)?kuaishou\.com/short-video/([A-Za-z0-9_-]+)(?:[/?#]|$)",
     }
     public = re.search(patterns.get(platform, r"(?!)"), page.url or "")
+    if platform == "wechat":
+        if any(key in parse_qs(urlparse(page.url or "").query) for key in ("tempkey", "token", "is_temp_url", "preview")):
+            public = None
     if public and expected_title and normalize_text(expected_title) in normalize_text(body):
         return {"status": "published", "message": "已打开并确认平台公开文章页面",
                 "platform_id": public.group(1), "platform_url": page.url, "platform_status": "已发布"}
-    if any(term in signals for term in ("提交成功", "等待审核", "审核中", "发布成功")):
-        term = next(term for term in ("审核中", "等待审核", "发布成功", "提交成功") if term in signals)
+    if any(term in signals for term in ("提交成功", "等待审核", "审核中", "发布成功", "发表成功")):
+        term = next(term for term in ("审核中", "等待审核", "发布成功", "发表成功", "提交成功") if term in signals)
         # 发布成功通常仍可能待审，因此必须有公开文章链接才能标记 published。
         return {"status": "submitted", "message": f"平台已确认提交：{term}", "platform_status": term}
     return {"status": "unknown", "message": "已尝试提交，尚未获得平台确认；请核对内容记录，勿重复提交"}

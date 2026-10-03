@@ -18,7 +18,7 @@ from utils.analytics.routes import register_analytics_routes
 from utils.analytics.push import register_analytics_push_routes
 from flask import Flask, request, jsonify, Response, render_template, send_from_directory
 from conf import BASE_DIR
-from myUtils.login import get_tencent_cookie, douyin_cookie_gen, get_ks_cookie, xiaohongshu_cookie_gen, baijiahao_cookie_gen, bilibili_cookie_gen, toutiao_cookie_gen, sohu_cookie_gen, zhihu_cookie_gen, weibo_cookie_gen, qiehao_cookie_gen
+from myUtils.login import get_tencent_cookie, douyin_cookie_gen, get_ks_cookie, xiaohongshu_cookie_gen, baijiahao_cookie_gen, bilibili_cookie_gen, toutiao_cookie_gen, sohu_cookie_gen, zhihu_cookie_gen, weibo_cookie_gen, qiehao_cookie_gen, wechat_cookie_gen, jd_cookie_gen, xiaohongshu_merchant_cookie_gen, dongchedi_cookie_gen, taobao_cookie_gen
 from myUtils.postVideo import post_video_tencent, post_video_DouYin, post_video_ks, post_video_xhs, post_video_baijiahao, post_video_bilibili, post_video_toutiao, post_article_toutiao, post_article_baijiahao, post_article_sohu, post_article_zhihu
 from uploader.douyin_uploader.content_stats import (
     DouyinStatsSyncError,
@@ -472,7 +472,7 @@ def delete_account():
 # SSE 登录接口
 @app.route('/login')
 def login():
-    # 原 1—9 类型兼容；10 微博，11 企鹅号，2 始终是微信视频号。
+    # 原有编号保持兼容；13—16 为独立图文账号，2 始终是微信视频号。
     type = request.args.get('type')
     # 账号名
     id = request.args.get('id')
@@ -523,8 +523,8 @@ def _validate_publish_capability(data):
     mode = str(data.get("contentType") or "").strip().lower()
     if mode == "article" and kind not in ARTICLE_ACCOUNT_TYPES:
         raise ArticleError("该账号平台不支持统一文章发布")
-    if mode == "video" and kind in {10, 11}:
-        raise ArticleError("微博与企鹅号账号当前仅支持文章发布")
+    if mode == "video" and kind in ARTICLE_ONLY_ACCOUNT_TYPES:
+        raise ArticleError("该账号平台当前仅支持文章发布")
 
 
 def _submit_legacy_article(data):
@@ -1506,6 +1506,16 @@ def run_async_function(type,id,status_queue):
                 asyncio.run(weibo_cookie_gen(id, status_queue))
             case '11':
                 asyncio.run(qiehao_cookie_gen(id, status_queue))
+            case '12':
+                asyncio.run(wechat_cookie_gen(id, status_queue))
+            case '13':
+                asyncio.run(jd_cookie_gen(id, status_queue))
+            case '14':
+                asyncio.run(xiaohongshu_merchant_cookie_gen(id, status_queue))
+            case '15':
+                asyncio.run(dongchedi_cookie_gen(id, status_queue))
+            case '16':
+                asyncio.run(taobao_cookie_gen(id, status_queue))
             case _:
                 print(f"❌ 不支持的登录平台类型: {type}", flush=True)
                 status_queue.put("500")

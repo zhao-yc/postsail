@@ -16,7 +16,7 @@ class ArticleError(ValueError):
         self.status = status
 
 
-from .platforms import PLATFORMS
+from .platforms import PLATFORMS, NOTE_PLATFORMS
 
 # 这里只记录可复查的真实验收，不能由适配器存在或模拟测试推导。
 LIVE_VERIFICATION = {
@@ -82,6 +82,11 @@ def validate_options(platform: str, options: dict) -> None:
     if any(options.get(key) for key in ("schedule", "publish_date", "enableTimer")):
         raise ArticleError("文章暂不支持定时发布")
     fields = {field["name"]: field for field in rules["option_fields"]}
+    for name, field in fields.items():
+        if field.get("required"):
+            value = options.get(name)
+            if value is None or (isinstance(value, str) and not value.strip()):
+                raise ArticleError(f"{rules['label']}必须填写{field['label']}")
     for name, value in options.items():
         if name in {"schedule", "publish_date", "enableTimer"}:
             continue
@@ -105,15 +110,18 @@ def validate_options(platform: str, options: dict) -> None:
 def capabilities() -> list[dict]:
     """公开能力中明确区分实现与真实平台验收状态。"""
     return [{"platform": platform, **rules, "scheduled": False,
-             "formats": ["headings", "bold", "lists", "quotes",
-                         "link_text" if platform == "douyin" else "links", "images", "table", "code"],
+             "formats": (["text", "link_text", "images"] if platform in NOTE_PLATFORMS else
+                         ["headings", "bold", "lists", "quotes",
+                          "link_text" if platform == "douyin" else "links", "images", "table", "code"]),
              "live_verified": LIVE_VERIFICATION.get(platform, {}).get("published", False),
              "verification": {stage: LIVE_VERIFICATION.get(platform, {}).get(stage, False)
                               for stage in ("preview", "submitted", "published")},
              "verification_scope": LIVE_VERIFICATION.get(platform, {}).get("scope", "缺少真实账号验收"),
              "verification_date": LIVE_VERIFICATION.get(platform, {}).get("date", ""),
              "verification_url": LIVE_VERIFICATION.get(platform, {}).get("url", ""),
-             "permission_check": "进入平台编辑器后检查账号文章权限",
-             "format_fallbacks": {"table": "image", "code": "image",
-                                  **({"links": "text_url_opt_in"} if platform == "douyin" else {})}}
+             "permission_check": "进入平台编辑器后检查账号图文权限",
+             "format_fallbacks": ({"rich_text": "plain_text_opt_in", "links": "text_url",
+                                   "inline_images": "ordered_album"} if platform in NOTE_PLATFORMS else
+                                  {"table": "image", "code": "image",
+                                   **({"links": "text_url_opt_in"} if platform == "douyin" else {})})}
             for platform, rules in PLATFORMS.items()]

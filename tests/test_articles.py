@@ -22,10 +22,10 @@ from utils.articles.routes import register_article_routes
 from utils.articles.service import ArticleService
 
 
-def image_bytes():
+def image_bytes(size=(640, 480)):
     """生成本地测试图片，不使用真实账号或官网素材。"""
     buffer = io.BytesIO()
-    Image.new("RGB", (640, 480), "white").save(buffer, "PNG")
+    Image.new("RGB", size, "white").save(buffer, "PNG")
     return buffer.getvalue()
 
 
@@ -102,6 +102,100 @@ class ArticlesTest(unittest.TestCase):
         self.assertEqual(by_platform["toutiao"]["status"], "failed")
         self.assertIn("标题", by_platform["toutiao"]["message"])
         self.assertFalse(by_platform["toutiao"]["retry_allowed"])
+
+    def test_new_image_text_platforms_preflight_in_same_batch(self):
+        """新增笔记与文章共用批次，转换明确且公众号与视频号账号不混用。"""
+        asset = self.service.assets.save(image_bytes(), "图文封面.png")
+        for name in ("xhs.json", "ks.json", "channels.json", "wechat.json"):
+            (self.cookies / name).write_text('{"cookies":[],"origins":[]}', encoding="utf-8")
+        with self.service.store.connect(write=True) as conn:
+            conn.executemany("INSERT INTO user_info VALUES (?,?,?,?,?)", [
+                (3, 1, "xhs.json", "小红书", 1), (4, 4, "ks.json", "快手", 1),
+                (5, 2, "channels.json", "视频号", 1), (6, 12, "wechat.json", "公众号", 1)])
+        self.article = self.service.update_article(self.article["id"], {"expected_revision": 1,
+            "cover_asset_id": asset["id"]})
+        targets = [{"platform": "zhihu", "account_id": 1}]
+        targets += [{"platform": platform, "account_id": account_id,
+                     "overrides": {"options": {"flatten_content": True}}}
+                    for platform, account_id in (("xiaohongshu", 3), ("kuaishou", 4), ("tencent", 5))]
+        targets.append({"platform": "wechat", "account_id": 6})
+        batch = self.publish(targets=targets, mode="preview")
+        self.assertEqual(len(batch["tasks"]), 5)
+        self.assertTrue(all(task["status"] == "queued" for task in batch["tasks"]))
+        with self.assertRaisesRegex(ArticleError, "平台|账号"):
+            self.service.account_file(5, "wechat")
+        with self.assertRaisesRegex(ArticleError, "平台|账号"):
+            self.service.account_file(6, "tencent")
+
+    def test_note_rich_format_error_does_not_block_other_targets(self):
+        """富文本未同意转换时立即记录该目标失败，保留原稿并继续其他目标。"""
+        with self.service.store.connect(write=True) as conn:
+            conn.execute("INSERT INTO user_info VALUES (3,1,'a.json','小红书测试账号',1)")
+        batch = self.publish(targets=[{"platform": "xiaohongshu", "account_id": 3},
+                                      {"platform": "zhihu", "account_id": 1}], mode="preview")
+        results = {task["platform"]: task for task in batch["tasks"]}
+        self.assertEqual(results["xiaohongshu"]["status"], "failed")
+        self.assertIn("纯文本", results["xiaohongshu"]["message"])
+        self.assertEqual(results["zhihu"]["status"], "queued")
+        self.assertIn("<strong>", self.service.get_article(self.article["id"])["content_html"])
+
+    def commerce_accounts(self):
+        rows = [(3, 13, "a.json", "京东账号", 1), (4, 14, "a.json", "商家账号", 1),
+                (5, 15, "a.json", "懂车号账号", 1), (6, 16, "a.json", "淘宝账号", 1)]
+        with self.service.store.connect(write=True) as conn:
+            conn.executemany("INSERT INTO user_info VALUES (?,?,?,?,?)", rows)
+
+    def test_four_more_platforms_share_batch_and_keep_required_overrides(self):
+        self.commerce_accounts()
+        asset = self.service.assets.save(image_bytes((800, 800)), "商品图.png")
+        self.article = self.service.update_article(self.article["id"], {"expected_revision": 1,
+            "cover_asset_id": asset["id"], "platform_options": {
+                "xiaohongshu_merchant": {"options": {"shop_name": "测试商家店铺", "flatten_content": True}},
+                "taobao": {"options": {"statement": "含AI生成内容", "flatten_content": True}}}})
+        targets = [
+            {"platform": "jd", "account_id": 3, "overrides": {"options": {"flatten_content": True}}},
+            {"platform": "xiaohongshu_merchant", "account_id": 4,
+             "overrides": {"options": {"product_id": "12345678"}}},
+            {"platform": "dongchedi", "account_id": 5},
+            {"platform": "taobao", "account_id": 6},
+        ]
+        batch = self.publish(targets=targets, mode="preview")
+        self.assertEqual(len(batch["tasks"]), 4)
+        self.assertTrue(all(task["status"] == "queued" for task in batch["tasks"]))
+        accounts = {account["id"]: account["platform"] for account in self.service.accounts()}
+        self.assertEqual([accounts[i] for i in (3, 4, 5, 6)], ["jd", "xiaohongshu_merchant", "dongchedi", "taobao"])
+        with self.service.store.connect() as conn:
+            snapshots = {row["platform"]: json.loads(row["snapshot_json"]) for row in conn.execute(
+                "SELECT platform,snapshot_json FROM article_publish_tasks WHERE batch_id=?", (batch["id"],))}
+        self.assertEqual(snapshots["xiaohongshu_merchant"]["options"],
+                         {"shop_name": "测试商家店铺", "product_id": "12345678", "flatten_content": True})
+        self.assertEqual(snapshots["taobao"]["options"]["statement"], "含AI生成内容")
+        with self.assertRaises(ArticleError):
+            self.service.account_file(4, "xiaohongshu")
+
+    def test_missing_commerce_requirements_fail_only_their_target(self):
+        self.commerce_accounts()
+        batch = self.publish(targets=[{"platform": "xiaohongshu_merchant", "account_id": 4},
+                                      {"platform": "taobao", "account_id": 6},
+                                      {"platform": "zhihu", "account_id": 1}], mode="preview")
+        results = {task["platform"]: task for task in batch["tasks"]}
+        for platform in ("xiaohongshu_merchant", "taobao"):
+            self.assertEqual(results[platform]["status"], "failed")
+            self.assertIn("必须填写", results[platform]["message"])
+        self.assertEqual(results["zhihu"]["status"], "queued")
+
+    def test_taobao_image_size_is_validated_before_queueing(self):
+        self.commerce_accounts()
+        asset = self.service.assets.save(image_bytes(), "尺寸不足.png")
+        self.article = self.service.update_article(self.article["id"], {"expected_revision": 1,
+            "content": "平台正文", "format": "text", "cover_asset_id": asset["id"]})
+        batch = self.publish(targets=[{"platform": "taobao", "account_id": 6,
+                                      "overrides": {"options": {"statement": "内容无需标注"}}},
+                                     {"platform": "jd", "account_id": 3}], mode="preview")
+        results = {task["platform"]: task for task in batch["tasks"]}
+        self.assertEqual(results["taobao"]["status"], "failed")
+        self.assertIn("720", results["taobao"]["message"])
+        self.assertEqual(results["jd"]["status"], "queued")
 
     def test_submit_exception_unknown_and_manual_resolve(self):
         """提交后网络失败不能重发；人工确认未发表后才允许重试。"""
@@ -448,7 +542,7 @@ class ArticlesTest(unittest.TestCase):
         self.assertEqual(client.get("/api/articles").json["data"][0]["id"], self.article["id"])
         self.assertEqual(client.patch(f'/api/articles/{self.article["id"]}', json={"expected_revision": 0}).status_code, 409)
         caps = client.get("/api/article-capabilities").json["data"]["platforms"]
-        self.assertEqual(len(caps), 8)
+        self.assertEqual(len(caps), 16)
         self.assertTrue(all(not item["scheduled"] for item in caps))
 
 

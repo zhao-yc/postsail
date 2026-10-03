@@ -1,7 +1,7 @@
 <template>
   <div class="publish-center">
     <el-alert type="info" :closable="false" class="article-entry">
-      <template #title>抖音、B站、百家号、今日头条、微博、知乎、企鹅号、搜狐的文章发布请使用 <router-link to="/articles">文章工作台</router-link>。</template>
+      <template #title>图文发布请使用 <router-link to="/articles">文章工作台</router-link>，支持抖音、快手、视频号、小红书、百家号、今日头条、微博、知乎、搜狐号、微信公众号、B站、企鹅号，以及京东、小红书商家号、懂车号、淘宝光合。</template>
     </el-alert>
     <!-- Tab管理区域 -->
     <div class="tab-management">

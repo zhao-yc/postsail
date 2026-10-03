@@ -227,8 +227,23 @@ class ArticleService:
             tags = article["tags"]
         if not isinstance(tags, list) or len(tags) > 20 or any(not isinstance(tag, str) or len(tag) > 100 for tag in tags):
             raise ArticleError("平台话题必须为文本数组，最多 20 个，每项不超过 100 字")
-        return {"platform": platform, "title": title.strip(), "content_html": article["content_html"],
-                "cover_asset_id": cover, "tags": tags, "options": options, "mode": mode}
+        if tags and rules.get("tags_supported") is False:
+            raise ArticleError(f"{rules['label']}暂不支持原生话题，请清空该平台的话题")
+        snapshot = {"platform": platform, "title": title.strip(), "content_html": article["content_html"],
+                    "cover_asset_id": cover, "tags": tags, "options": options, "mode": mode}
+        if rules.get("content_mode") == "image_text":
+            # 提交批次时就报告笔记格式/字数/相册问题，避免启动浏览器后才发现。
+            from .notes import prepare_note_document
+            from .browser import PreparationError
+            asset_ids = {image.get("data-asset-id") for image in image_references(snapshot["content_html"])}
+            if cover:
+                asset_ids.add(cover)
+            assets = {asset_id: self.assets.get(asset_id) for asset_id in asset_ids if asset_id}
+            try:
+                prepare_note_document(snapshot, assets)
+            except PreparationError as exc:
+                raise ArticleError(str(exc)) from exc
+        return snapshot
 
     def publish(self, article_id, data):
         """一个原稿修订形成一个批次，每个目标账号各自校验和执行。"""

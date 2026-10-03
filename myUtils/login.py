@@ -719,6 +719,31 @@ async def qiehao_cookie_gen(id, status_queue):
     return await article_account_cookie_gen(id, status_queue, "qiehao", 11)
 
 
+async def wechat_cookie_gen(id, status_queue):
+    """微信公众号使用独立类型 12，不能复用视频号或企鹅号凭据。"""
+    return await article_account_cookie_gen(id, status_queue, "wechat", 12)
+
+
+async def jd_cookie_gen(id, status_queue):
+    """京东创作者使用独立类型 13。"""
+    return await article_account_cookie_gen(id, status_queue, "jd", 13)
+
+
+async def xiaohongshu_merchant_cookie_gen(id, status_queue):
+    """小红书商家号使用独立类型 14，不能复用个人账号记录。"""
+    return await article_account_cookie_gen(id, status_queue, "xiaohongshu_merchant", 14)
+
+
+async def dongchedi_cookie_gen(id, status_queue):
+    """懂车号使用独立类型 15。"""
+    return await article_account_cookie_gen(id, status_queue, "dongchedi", 15)
+
+
+async def taobao_cookie_gen(id, status_queue):
+    """淘宝光合创作者使用独立类型 16。"""
+    return await article_account_cookie_gen(id, status_queue, "taobao", 16)
+
+
 def launch_bilibili_login_terminal(biliup_path, account_file, system=None):
     """按系统打开交互终端；参数逐项传入，macOS shell 参数和 AppleScript 分别转义。"""
     import shlex

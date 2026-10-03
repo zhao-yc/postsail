@@ -60,16 +60,21 @@ class AnalyticsTests(unittest.TestCase):
         with sqlite3.connect(self.path) as conn:
             conn.executemany("INSERT INTO user_info VALUES(?,?,?,?,?)", [
                 (4, 10, "微博文章账号", 1, "weibo.json"),
-                (5, 11, "企鹅号文章账号", 1, "qiehao.json")])
+                (5, 11, "企鹅号文章账号", 1, "qiehao.json"),
+                (6, 12, "微信公众号文章账号", 1, "wechat.json"),
+                (7, 13, "京东图文账号", 1, "jd.json"),
+                (8, 14, "小红书商家账号", 1, "merchant.json"),
+                (9, 15, "懂车号账号", 1, "dongchedi.json"),
+                (10, 16, "淘宝光合账号", 1, "taobao.json")])
         items = self.service.accounts(self.filters)["items"]
-        self.assertEqual({item["accountId"] for item in items}, {1, 2, 3, 4, 5})
+        self.assertEqual({item["accountId"] for item in items}, set(range(1, 11)))
         for account in items:
-            if account["accountId"] in (4, 5):
+            if account["accountId"] >= 4:
                 self.assertFalse(account["statsSupported"])
                 self.assertIsNone(account["playCount"])
                 self.assertIsNone(account["followerCount"])
                 self.assertEqual(account["workCount"], 0)
-        self.assertEqual(self.service.overview(self.filters)["summary"]["accountCount"], 5)
+        self.assertEqual(self.service.overview(self.filters)["summary"]["accountCount"], 10)
 
     def test_real_growth_and_negative_platform_correction(self):
         self.snapshot(1, play=100)

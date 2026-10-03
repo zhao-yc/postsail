@@ -186,6 +186,16 @@ async def check_cookie(type, file_path):
             return await cookie_auth_article_account("weibo", Path(BASE_DIR / "cookiesFile" / file_path))
         case 11:
             return await cookie_auth_article_account("qiehao", Path(BASE_DIR / "cookiesFile" / file_path))
+        case 12:
+            return await cookie_auth_article_account("wechat", Path(BASE_DIR / "cookiesFile" / file_path))
+        case 13:
+            return await cookie_auth_article_account("jd", Path(BASE_DIR / "cookiesFile" / file_path))
+        case 14:
+            return await cookie_auth_article_account("xiaohongshu_merchant", Path(BASE_DIR / "cookiesFile" / file_path))
+        case 15:
+            return await cookie_auth_article_account("dongchedi", Path(BASE_DIR / "cookiesFile" / file_path))
+        case 16:
+            return await cookie_auth_article_account("taobao", Path(BASE_DIR / "cookiesFile" / file_path))
         case _:
             return False
 
@@ -199,16 +209,56 @@ ARTICLE_LOGIN_PROBES = {
                            '[class*="sidebar"] a:text-is("内容管理"):visible, '
                            'a:text-is("退出登录"):visible, button:text-is("退出登录"):visible, '
                            '[role="menuitem"]:text-is("退出登录"):visible'},
+    "wechat": {"url": "https://mp.weixin.qq.com/", "host": "mp.weixin.qq.com",
+               "selector": '#menuBar a[href*="/cgi-bin/appmsg"]:visible, '
+                           '#menuBar a[href*="/cgi-bin/appmsgpublish"]:visible, '
+                           '.weui-desktop-layout__side a[href*="/cgi-bin/appmsg"]:visible, '
+                           'a[href*="action=logout"]:visible'},
+    # 京东官方创作者前端在成功查询达人资料后写入 _gdata.user。
+    "jd": {"url": "https://dr.jd.com/n/home.html", "host": "dr.jd.com", "path_prefix": "/n/",
+           "script": "() => { const user = window._gdata && window._gdata.user; "
+                     "return !!(user && String(user.id || '').trim() && "
+                     "typeof user.pin === 'string' && user.pin.trim()); }"},
+    # 商家店铺后台必须有店名；个人 creator 后台和 customer 登录页均不能通过。
+    "xiaohongshu_merchant": {"url": "https://ark.xiaohongshu.com/ark/home", "host": "ark.xiaohongshu.com",
+                            "selectors": ['.store-name:visible'], "text_selector": '.store-name:visible'},
+    "dongchedi": {"url": "https://mp.dcdapp.com/profile_v2/publish/article", "host": "mp.dcdapp.com",
+                  "path": "/profile_v2/publish/article",
+                  "selectors": ['textarea:visible', 'button.publish-btn:text-is("预览并发布"):visible',
+                                'div[contenteditable="true"]:visible, iframe[id^="ueditor_"]:visible']},
+    "taobao": {"url": "https://creator.guanghe.taobao.com/", "host": "creator.guanghe.taobao.com",
+               "selectors": ['img[data-autolog-container="user_content_account"]:visible',
+                             '[data-autolog*="text=用户模块-账号管理"]:visible',
+                             '[data-autolog*="text=发布作品"]:visible'],
+               "text_selector": '[data-autolog*="text=用户模块-账号管理"]:visible',
+               "text_exclusions": {"账号正常", "逛逛号", "账号管理"}},
 }
+
+
+def _article_probe_location_matches(url, platform, probe):
+    """登录地址与后台地址共用域名时，仍须验证路径和平台要求的令牌。"""
+    from urllib.parse import parse_qs, urlparse
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or parsed.hostname != probe["host"]:
+        return False
+    if any(value in (parsed.path + "#" + parsed.fragment).lower() for value in ("login", "signin", "userauth")):
+        return False
+    if probe.get("path") and parsed.path.rstrip("/") != probe["path"]:
+        return False
+    if probe.get("path_prefix") and not parsed.path.startswith(probe["path_prefix"]):
+        return False
+    if platform == "wechat":
+        token = parse_qs(parsed.query).get("token", [""])[0]
+        if not parsed.path.startswith("/cgi-bin/") or not token.isascii() or not token.isdigit() or int(token) == 0:
+            return False
+    return True
 
 
 async def article_account_is_logged_in(page, platform, timeout=10_000):
     """必须同时命中平台后台域名和正向编辑器或导航标识，避免超时误判成功。"""
-    from urllib.parse import urlparse
     probe = ARTICLE_LOGIN_PROBES[platform]
     try:
-        parsed = urlparse(page.url)
-        if parsed.hostname != probe["host"] or any(value in parsed.path.lower() for value in ("login", "signin", "userauth")):
+        if not _article_probe_location_matches(page.url, platform, probe):
             return False
         if platform == "weibo":
             import re
@@ -221,17 +271,33 @@ async def article_account_is_logged_in(page, platform, timeout=10_000):
                 await write.first.wait_for(state="visible", timeout=timeout)
                 drafts = page.get_by_text(re.compile(r"^(?:我的)?草稿(?:箱|管理)?(?:\s*[（(]\d+[）)])?$"))
                 await drafts.first.wait_for(state="visible", timeout=timeout)
+        elif platform in {"jd", "xiaohongshu_merchant", "dongchedi", "taobao"}:
+            if probe.get("script"):
+                await page.wait_for_function(probe["script"], timeout=timeout)
+            for selector in probe.get("selectors", []):
+                await page.locator(selector).first.wait_for(state="visible", timeout=timeout)
+            if probe.get("text_selector"):
+                field = page.locator(probe["text_selector"])
+                if await field.count() != 1:
+                    return False
+                lines = (await field.first.inner_text()).splitlines()
+                if not any(line.strip() and line.strip() not in probe.get("text_exclusions", set()) for line in lines):
+                    return False
+            challenge = page.locator('iframe[src*="captcha"]:visible, iframe[src*="geetest"]:visible, '
+                                     '[role="dialog"]:has-text("请完成验证"):visible, '
+                                     '[role="dialog"]:has-text("安全验证"):visible')
+            if await challenge.count():
+                return False
         else:
-            # 企鹅号只接受后台导航/账号操作，公开首页的「内容管理」宣传文字不能通过。
+            # 只接受后台导航/账号操作，公开首页的宣传文字不能通过。
             await page.locator(probe["selector"]).first.wait_for(state="visible", timeout=timeout)
-        parsed = urlparse(page.url)
-        return parsed.hostname == probe["host"] and not any(value in parsed.path.lower() for value in ("login", "signin", "userauth"))
+        return _article_probe_location_matches(page.url, platform, probe)
     except Exception:
         return False
 
 
 async def cookie_auth_article_account(platform, account_file):
-    """微博与企鹅号正向登录探测，仅访问编辑页，不修改内容。"""
+    """独立文章账号正向登录探测，仅访问后台页面，不修改内容。"""
     from utils.articles.session import load_article_storage_state
     browser = None
     try:

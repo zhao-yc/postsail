@@ -13,7 +13,12 @@ export const PLATFORM_TYPES = {
   8: '搜狐',
   9: '知乎',
   10: '微博',
-  11: '企鹅号'
+  11: '企鹅号',
+  12: '微信公众号',
+  13: '京东',
+  14: '小红书商家号',
+  15: '懂车号',
+  16: '淘宝光合'
 }
 
 export const useAccountStore = defineStore('account', () => {

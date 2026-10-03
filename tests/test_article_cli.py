@@ -337,7 +337,7 @@ class ArticleCliApiIntegrationTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in accounts["data"]], [1])
         self.assertNotIn("filePath", str(accounts))
         code, caps = self.command("capabilities")
-        self.assertEqual(len(caps["data"]["platforms"]), 8)
+        self.assertEqual(len(caps["data"]["platforms"]), 16)
         self.assertEqual({item["platform"] for item in caps["data"]["platforms"] if item["live_verified"]},
                          {"douyin"})
 
