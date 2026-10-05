@@ -84,7 +84,7 @@ def validate_options(platform: str, options: dict) -> None:
     if not isinstance(options, dict):
         raise ArticleError("平台 options 必须为对象")
     if any(options.get(key) for key in ("schedule", "publish_date", "enableTimer")):
-        raise ArticleError("文章暂不支持定时发布")
+        raise ArticleError("平台 options 不支持定时参数，请通过发布目标的 schedule 设置后端排期")
     fields = {field["name"]: field for field in rules["option_fields"]}
     for name, field in fields.items():
         if field.get("required") and (name not in options or options[name] is None or
@@ -229,7 +229,11 @@ def validate_platform_cover(platform: str, cover: dict, first_body_asset: dict |
 
 def capabilities() -> list[dict]:
     """公开能力中明确区分实现与真实平台验收状态。"""
-    return [{"platform": platform, **rules, "scheduled": False,
+    from .scheduling import supports_server_schedule
+    scheduled_platforms = {platform for platform in PLATFORMS if supports_server_schedule(platform)}
+    return [{"platform": platform, **rules, "scheduled": platform in scheduled_platforms,
+             "schedule_mode": "server" if platform in scheduled_platforms else None,
+             "schedule_reason": "后端到点开始提交，实际公开时间由平台审核决定" if platform in scheduled_platforms else "当前平台发布能力不可用，暂不能安排定时任务",
              "formats": ["text", "link_text", "images"] if platform in NOTE_PLATFORMS else ["headings", "bold", "lists", "quotes",
                          "link_text" if platform in {"douyin", "chejiahao"} else "links", "images", "table", "code"],
              "live_verified": LIVE_VERIFICATION.get(platform, {}).get("published", False),

@@ -143,6 +143,43 @@ class ArticleCliContractTests(unittest.TestCase):
         self.assertEqual(args.server, "http://example.test")
         self.assertTrue(args.json)
 
+    def test_publish_schedule_and_preview_rejection(self):
+        code, _, session = self.run_command([
+            "publish", "draft", "--platform", "douyin", "--account-id", "1", "--revision", "1",
+            "--publish-at", "2030-01-02T10:00:00", "--timezone", "Asia/Tokyo"],
+            [response({"tasks": [{"status": "scheduled"}]})])
+        self.assertEqual(code, 0)
+        self.assertEqual(session.request.call_args.kwargs["json"]["schedule"],
+                         {"publish_at": "2030-01-02T10:00:00", "timezone": "Asia/Tokyo"})
+        code, output, session = self.run_command([
+            "publish", "draft", "--platform", "douyin", "--account-id", "1", "--preview",
+            "--publish-at", "2030-01-02T10:00:00"], [])
+        self.assertEqual(code, 1)
+        self.assertIn("不能排期", output["msg"])
+        session.request.assert_not_called()
+
+    def test_pending_reschedule_cancel_and_wait_scheduled(self):
+        code, _, session = self.run_command(["pending", "--page", "2", "--page-size", "10"],
+                                            [response({"items": [], "total": 0})])
+        self.assertEqual(code, 0)
+        self.assertEqual(session.request.call_args.kwargs["params"], {"page": 2, "page_size": 10})
+        self.assertTrue(session.request.call_args.args[1].endswith('/api/article-publish-tasks'))
+        code, _, session = self.run_command([
+            "reschedule", "task", "--publish-at", "2030-01-03T10:00:00", "--schedule-revision", "0"], [response()])
+        self.assertEqual(code, 0)
+        self.assertEqual(session.request.call_args.args[0], "PATCH")
+        self.assertEqual(session.request.call_args.kwargs["json"], {
+            "expected_schedule_revision": 0, "schedule": {"publish_at": "2030-01-03T10:00:00", "timezone": "Asia/Shanghai"}})
+        code, _, session = self.run_command(["cancel", "task", "--schedule-revision", "1"], [response()])
+        self.assertEqual(code, 0)
+        self.assertEqual(session.request.call_args.kwargs["json"], {"expected_schedule_revision": 1})
+        with patch("utils.articles.cli.time.sleep"):
+            code, output, session = self.run_command(["status", "batch", "--wait"],
+                [response({"tasks": [{"status": "scheduled"}]}), response({"tasks": [{"status": "cancelled"}]})])
+        self.assertEqual(code, 0)
+        self.assertEqual(output["data"]["tasks"][0]["status"], "cancelled")
+        self.assertEqual(session.request.call_count, 2)
+
     def test_import_uploads_local_assets_then_posts_original_format(self):
         with tempfile.TemporaryDirectory() as temp:
             article = Path(temp) / "article.md"
@@ -304,7 +341,7 @@ class ArticleCliApiIntegrationTests(unittest.TestCase):
             data = {key: (io.BytesIO(item[1].read()), item[0], item[2]) for key, item in files.items()}
             result = self.web.open(urlsplit(url).path, method=method, data=data)
         else:
-            result = self.web.open(urlsplit(url).path, method=method, json=body)
+            result = self.web.open(urlsplit(url).path, method=method, json=body, query_string=kwargs.get("params"))
         return SimpleNamespace(status_code=result.status_code, json=result.get_json)
 
     def command(self, *argv):
@@ -314,6 +351,67 @@ class ArticleCliApiIntegrationTests(unittest.TestCase):
         with patch("utils.articles.cli.requests.Session", return_value=session), contextlib.redirect_stdout(stdout):
             code = sau_cli.main(["article", "--json", *argv])
         return code, json.loads(stdout.getvalue())
+
+    def test_multi_platform_backend_schedule_cli_preserves_notes_and_wechat_options(self):
+        """真实 CLI/API 混合原生文章、图片笔记和公众号的排期、改期及取消。"""
+        from PIL import Image
+        rows = [(103, 1, "xiaohongshu.json", "隔离小红书", 1), (125, 25, "wechat.json", "隔离公众号", 1)]
+        for row in rows:
+            (self.base / "cookiesFile" / row[2]).write_text('{"cookies":[],"origins":[]}', encoding="utf-8")
+        with sqlite3.connect(self.database) as connection:
+            connection.executemany("INSERT INTO user_info VALUES (?,?,?,?,?)", rows)
+            bind_account(connection, 103, "xiaohongshu", source="test-fixture")
+            bind_account(connection, 125, "wechat", source="test-fixture")
+        image = self.base / "配图.png"
+        Image.new("RGB", (800, 800), "blue").save(image)
+        original = self.base / "排期原稿.md"
+        original.write_text("# 保留文章结构\n\n这是排期测试正文。\n\n![首图](配图.png)", encoding="utf-8")
+        code, imported = self.command("import", "--file", str(original), "--title", "多平台后端排期测试标题", "--cover", str(image))
+        self.assertEqual(code, 0, imported)
+        targets = [
+            {"platform": "zhihu", "account_id": 1},
+            {"platform": "toutiao", "account_id": 2, "schedule": None},
+            {"platform": "xiaohongshu", "account_id": 103, "overrides": {"options": {"flatten_content": True}}},
+            {"platform": "wechat", "account_id": 125,
+             "schedule": {"publish_at": "2030-01-02T13:00:00", "timezone": "Asia/Tokyo"},
+             "overrides": {"options": {"author": "测试作者", "summary": "公众号测试摘要"}}},
+        ]
+        target_file = self.base / "排期目标.json"
+        target_file.write_text(json.dumps(targets, ensure_ascii=False), encoding="utf-8")
+        args = ("publish", imported["data"]["id"], "--targets", str(target_file),
+                "--publish-at", "2030-01-02T10:00:00", "--idempotency-key", "mixed-scheduled")
+        code, publication = self.command(*args)
+        self.assertEqual(code, 0, publication)
+        tasks = {task["platform"]: task for task in publication["data"]["tasks"]}
+        self.assertEqual(tasks["toutiao"]["status"], "queued")
+        self.assertTrue(all(tasks[name]["status"] == "scheduled" for name in ("zhihu", "xiaohongshu", "wechat")))
+        self.assertEqual(tasks["wechat"]["scheduled_at"], "2030-01-02T04:00:00.000000+00:00")
+        self.assertEqual(tasks["xiaohongshu"]["scheduled_at"], "2030-01-02T02:00:00.000000+00:00")
+        service = self.web.application.extensions["article_service"]()
+        with service.store.connect() as connection:
+            frozen = {row["platform"]: row["snapshot_json"] for row in connection.execute("SELECT * FROM article_publish_tasks")}
+        self.assertTrue(json.loads(frozen["xiaohongshu"])["options"]["flatten_content"])
+        self.assertEqual(json.loads(frozen["wechat"])["options"], {"author": "测试作者", "summary": "公众号测试摘要"})
+        code, pending = self.command("pending", "--page-size", "2", "--page", "2")
+        self.assertEqual(code, 0, pending)
+        self.assertEqual((pending["data"]["page"], len(pending["data"]["items"]), pending["data"]["total"]), (2, 2, 4))
+        code, changed = self.command("reschedule", tasks["xiaohongshu"]["id"], "--publish-at", "2030-01-03T18:00:00",
+                                     "--timezone", "Asia/Tokyo", "--schedule-revision", "0")
+        self.assertEqual(code, 0, changed)
+        updated = next(task for task in changed["data"]["tasks"] if task["platform"] == "xiaohongshu")
+        self.assertEqual(updated["scheduled_at"], "2030-01-03T09:00:00.000000+00:00")
+        code, stale = self.command("cancel", updated["id"], "--schedule-revision", "0")
+        self.assertEqual(code, 1)
+        self.assertIn("其他入口修改", stale["msg"])
+        code, cancelled = self.command("cancel", updated["id"], "--schedule-revision", "1")
+        self.assertEqual(code, 0, cancelled)
+        code, replay = self.command(*args)
+        self.assertEqual(code, 0, replay)
+        self.assertEqual(replay["data"]["id"], publication["data"]["id"])
+        self.assertEqual(next(task for task in replay["data"]["tasks"] if task["platform"] == "xiaohongshu")["status"], "cancelled")
+        with service.store.connect() as connection:
+            after = {row["platform"]: row["snapshot_json"] for row in connection.execute("SELECT * FROM article_publish_tasks")}
+        self.assertEqual(after, frozen)
 
     def test_new_platform_selectors_and_import_defaults_share_real_api_contract(self):
         """十三个新增平台经 CLI 导入、选账号和预览，沿用真实 API 与数据库校验。"""

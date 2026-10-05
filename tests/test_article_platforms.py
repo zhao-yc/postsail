@@ -37,7 +37,8 @@ class PlatformContractTests(unittest.TestCase):
     def test_implementation_is_not_reported_as_live_verified(self):
         """离线实现与真实发布验收分开，能力清单不伪造验收记录。"""
         for item in capabilities():
-            self.assertFalse(item["scheduled"])
+            self.assertEqual(item["scheduled"], item.get("available") is not False)
+            self.assertEqual(item["schedule_mode"], "server" if item["scheduled"] else None)
             self.assertIn("content_kind", item)
             self.assertEqual(set(item["verification"]), {"preview", "submitted", "published"})
             if item["platform"] in NOTE_PLATFORMS:

@@ -21,6 +21,8 @@ import requests
 from .platforms import ARTICLE_PLATFORMS
 DEFAULT_SERVER = "http://127.0.0.1:5409"
 STATUS_LABELS = {
+    "scheduled": "等待排期",
+    "cancelled": "已取消",
     "queued": "排队中",
     "running": "执行中",
     "needs_action": "需要处理",
@@ -133,6 +135,17 @@ def _add_article_fields(parser, *, creating=False):
     parser.add_argument("--platform-options", type=Path, help="各平台默认覆盖项的 JSON 文件")
 
 
+def _schedule_revision(value):
+    """排期版本从 0 开始，不能沿用账号 ID 的正整数约束。"""
+    try:
+        revision = int(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError("排期版本必须为非负整数") from exc
+    if revision < 0:
+        raise argparse.ArgumentTypeError("排期版本必须为非负整数")
+    return revision
+
+
 def add_article_parser(platform_parsers) -> None:
     """注册独立文章命令组，保持已有视频命令参数不变。"""
     parser = platform_parsers.add_parser("article", help="独立多平台文章管理与发布")
@@ -167,10 +180,25 @@ def add_article_parser(platform_parsers) -> None:
     publish.add_argument("--overrides", type=Path, help="--account-id 模式的公共覆盖项 JSON 文件")
     publish.add_argument("--preview", action="store_true", help="只准备并校验平台预览，不点击正式发布")
     publish.add_argument("--idempotency-key", help="重放同一次提交时复用此键；默认生成 UUID")
+    publish.add_argument("--publish-at", help="文章/图文按所选时区开始提交的时间，例如 2026-10-06T10:00:00；由 PostSail 后端调度")
+    publish.add_argument("--timezone", default="Asia/Shanghai", help="--publish-at 使用的 IANA 时区（默认 Asia/Shanghai）")
+
+    pending = actions.add_parser("pending", help="分页列出所有原稿的待发布任务")
+    pending.add_argument("--page", type=_positive_id, default=1)
+    pending.add_argument("--page-size", type=_positive_id, default=50)
+    reschedule = actions.add_parser("reschedule", help="修改尚未开始执行的文章/图文任务排期，保留原内容快照")
+    reschedule.add_argument("task_id", type=_resource_id)
+    reschedule.add_argument("--publish-at", required=True)
+    reschedule.add_argument("--timezone", default="Asia/Shanghai")
+    cancel = actions.add_parser("cancel", help="取消尚未开始执行的发布任务")
+    cancel.add_argument("task_id", type=_resource_id)
+    for command in (reschedule, cancel):
+        command.add_argument("--schedule-revision", required=True, type=_schedule_revision,
+                             help="pending/status 返回的 schedule_revision，防止覆盖其他入口的修改")
 
     status = actions.add_parser("status", help="查询批次及各账号状态")
     status.add_argument("batch_id", type=_resource_id)
-    status.add_argument("--wait", action="store_true", help="每 2 秒查询，直到所有目标停止排队和执行")
+    status.add_argument("--wait", action="store_true", help="每 2 秒查询，直到所有目标结束排期、排队和执行")
     status.add_argument("--timeout", type=_positive_seconds, default=300, help="--wait 截止秒数（默认 300）")
     retry = actions.add_parser("retry", help="安全重试一个失败或已处理的账号任务")
     retry.add_argument("task_id", type=_resource_id)
@@ -389,8 +417,8 @@ def _is_batch_pending(data: Any) -> bool:
         return False
     tasks = data.get("tasks", [])
     if tasks:
-        return any(task.get("status") in ("queued", "running") for task in tasks)
-    return data.get("status") in ("queued", "running")
+        return any(task.get("status") in ("scheduled", "queued", "running") for task in tasks)
+    return data.get("status") in ("scheduled", "queued", "running")
 
 
 def _emit_result(result: dict, as_json: bool) -> None:
@@ -409,16 +437,22 @@ def _emit_result(result: dict, as_json: bool) -> None:
             print(f"修订号：{data['revision']}")
         if data.get("status"):
             print(f"状态：{STATUS_LABELS.get(data['status'], data['status'])}")
-        for task in data.get("tasks", []):
+        for task in data.get("tasks", data.get("items", [])):
             label = STATUS_LABELS.get(task.get("status"), task.get("status", "未知"))
             print(f"任务 {task.get('id', '?')}：{task.get('platform', '')} / 账号 {task.get('account_id', '?')}：{label}")
+            if task.get("scheduled_at"):
+                print(f"  排期（UTC）：{task['scheduled_at']}；时区：{task.get('schedule_timezone', '')}")
+            if task.get("cancel_allowed"):
+                print(f"  排期版本：{task.get('schedule_revision', 0)}")
             if task.get("message"):
                 print(f"  详情：{task['message']}")
             if task.get("platform_status"):
                 print(f"  平台状态：{task['platform_status']}")
             if task.get("platform_url"):
                 print(f"  平台链接：{task['platform_url']}")
-        if "tasks" in data:
+        if "items" in data:
+            print(f"第 {data.get('page', 1)} 页，共 {data.get('total', 0)} 个待发布任务")
+        if "tasks" in data or "items" in data:
             return
     print(json.dumps(data, ensure_ascii=False, indent=2))
 
@@ -454,13 +488,26 @@ def run_article_command(args) -> int:
             result = {"code": 200, "msg": "素材已上传", "data": client.upload_asset(args.file or args.url)}
         elif args.action == "publish":
             targets = _publish_targets(args)
+            if args.preview and (args.publish_at or any(target.get("schedule") is not None for target in targets)):
+                raise ArticleCliError("平台预览不能排期，请移除发布时间后立即预览")
             revision = args.revision or client.request("GET", f"/api/articles/{args.article_id}")["data"]["revision"]
             payload = {"revision": revision, "targets": targets, "mode": "preview" if args.preview else "publish",
                        "idempotency_key": args.idempotency_key or str(uuid.uuid4())}
             operation_key = payload["idempotency_key"]
+            if args.publish_at:
+                payload["schedule"] = {"publish_at": args.publish_at, "timezone": args.timezone}
             result = client.request("POST", f"/api/articles/{args.article_id}/publish", json=payload)
             # 输出保存实际使用的幂等键；连接失败时请先查询现有记录，不能盲目重放。
             result = {**result, "idempotency_key": payload["idempotency_key"]}
+        elif args.action == "pending":
+            result = client.request("GET", "/api/article-publish-tasks", params={"page": args.page, "page_size": args.page_size})
+        elif args.action in {"reschedule", "cancel"}:
+            payload = {"expected_schedule_revision": args.schedule_revision}
+            if args.action == "reschedule":
+                payload["schedule"] = {"publish_at": args.publish_at, "timezone": args.timezone}
+                result = client.request("PATCH", f"/api/article-publish-tasks/{args.task_id}/schedule", json=payload)
+            else:
+                result = client.request("POST", f"/api/article-publish-tasks/{args.task_id}/cancel", json=payload)
         elif args.action == "status":
             deadline = time.monotonic() + args.timeout
             result = client.request("GET", f"/api/article-publish-batches/{args.batch_id}", timeout=min(client.timeout, args.timeout))

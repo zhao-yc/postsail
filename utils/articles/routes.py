@@ -112,6 +112,18 @@ def register_article_routes(app, configuration):
     def batch_item(batch_id):
         return response(service().get_batch(batch_id))
 
+    @bp.route("/api/article-publish-tasks")
+    def pending_tasks():
+        return response(service().pending_tasks(request.args.get("page", 1), request.args.get("page_size", 50)))
+
+    @bp.route("/api/article-publish-tasks/<task_id>/schedule", methods=["PATCH"])
+    def reschedule(task_id):
+        return response(service().change_schedule(task_id, payload()), "该账号排期已更新")
+
+    @bp.route("/api/article-publish-tasks/<task_id>/cancel", methods=["POST"])
+    def cancel_task(task_id):
+        return response(service().change_schedule(task_id, payload(), cancel=True), "该账号任务已取消")
+
     @bp.route("/api/article-publish-tasks/<task_id>/retry", methods=["POST"])
     def retry(task_id):
         return response(service().retry(task_id), "该账号任务已加入重试队列")
@@ -138,7 +150,7 @@ def register_article_routes(app, configuration):
         """旧纯文本文章请求转换到新服务，账号继续用网页账号记录。"""
         instance = service()
         if data.get("enableTimer") or data.get("schedule") or data.get("publish_date"):
-            raise ArticleError("首版文章仅支持立即发布，不支持定时")
+            raise ArticleError("旧文章入口不支持定时，请使用文章工作台或 sau article 设置后端排期")
         key = data["idempotency_key"] if "idempotency_key" in data else (request.headers.get("Idempotency-Key") or uuid.uuid4().hex)
         if not isinstance(key, str) or not key.strip() or len(key) > 200:
             raise ArticleError("幂等键必须为非空文本，且不能超过 200 字")

@@ -30,5 +30,8 @@ export const articlesApi = {
   }),
   batch: (id) => request.get(articleUrl(`/api/article-publish-batches/${id}`)),
   retry: (id) => request.post(articleUrl(`/api/article-publish-tasks/${id}/retry`), {}),
+  pending: (page = 1, pageSize = 20) => request.get(articleUrl('/api/article-publish-tasks'), { params: { page, page_size: pageSize } }),
+  reschedule: (id, data) => request.patch(articleUrl(`/api/article-publish-tasks/${id}/schedule`), data),
+  cancel: (id, revision) => request.post(articleUrl(`/api/article-publish-tasks/${id}/cancel`), { expected_schedule_revision: revision }),
   resolve: (id, data) => request.post(articleUrl(`/api/article-publish-tasks/${id}/resolve`), data)
 }

@@ -6,7 +6,7 @@ PostSail 接收准备好的原稿，通过 28 个平台能力分别提交原生�
 
 平台代码接入与真实账号验收分别记录。2026-10-01 已现场验证抖音单篇文章的标题、完整正文、三张正文图顺序及高清封面，预览和正式提交均通过，[抖音公开文章](https://www.douyin.com/article/7691535675165871406)已独立打开核实；其余 27 个能力缺少验收账号，`live_verified:false`。京东长文章和三个汽车平台补充了官方组件的离线浏览器验证，仍未执行真实账号登录、素材上传或发布。抖音本次未验收真实原生话题或声明，不能据此认定全部专属选项已通过。具体过程、平台限制和证据见[文章平台验证记录](./article-platform-verification.md)。
 
-文章发布使用 Web 后端保存的账号 ID。现有视频 CLI 的账号文件和参数保持不变。先在网页完成目标平台登录，再运行 `sau article accounts --json` 查找可用账号。第一版仅支持立即发布，定时请求会被拒绝，不会回退成立即发布。
+文章发布使用 Web 后端保存的账号 ID。现有视频 CLI 的账号文件和参数保持不变。先在网页完成目标平台登录，再运行 `sau article accounts --json` 查找可用账号。默认立即发布；全部 28 个可用文章 / 图文能力共用后端排期，覆盖原生文章与图片笔记。排期由 PostSail 后端执行，不使用平台原生定时控件；真实账号验收状态仍单独记录。
 
 旧文章入口会按内容复用原稿；这份原稿经网页或新 API 编辑后，再发送旧请求会返回修订冲突，须从文章管理或 `sau article` 读取最新稿件发布，避免使用非预期正文。
 
@@ -46,6 +46,40 @@ sau article accounts --server http://127.0.0.1:5409 --json
 ```
 
 `--request-timeout` 控制单次 API 请求超时，默认 30 秒。后端存储账号会话、原稿、图片和发布记录，服务应部署在受信任网络。不要把未设置访问保护的服务直接开放到公网。
+
+## 定时发布、改期与取消
+
+网页选择任一可用文章 / 图文平台的账号后，可分别设置「立即发布」或「定时发布」，填写时间及 IANA 时区。默认时区为 `Asia/Shanghai`，可选择或输入其他时区。同一批次可以同时包含不同平台的立即发布账号和不同时间的定时账号；仅预览会立即执行，不接受排期。平台被标记为 `available:false` 时，不接受新排期或改期，尚未执行的旧任务仍可取消。
+
+后端到点开始准备并提交内容，公开时间由平台审核决定。执行器串行处理任务，排期表示最早开始时间，可能因其他任务、账号验证或网络状况延后。后端应持续运行；重启后未到期任务继续等待，已到期且尚未执行的任务按原排期顺序执行。到期时重新检查账号绑定、会话文件及实际平台登录和权限，失败会显示具体原因，不会将请求受理当作已发表。
+
+排期冻结提交时的原稿修订、平台覆盖项和素材。之后编辑原稿不改变计划，改期也只修改执行时间。需要使用新内容时，先取消尚未执行的任务，再保存新修订并重新提交。「待发布」列表汇总全部原稿的排期和排队任务，分页查看；开始执行后不能改期或取消，提交后不确定的结果仍须人工核查。
+
+```bash
+sau article publish ARTICLE_ID --platform zhihu --account-id 1 \
+  --publish-at "2030-01-02T10:00:00" --timezone Asia/Shanghai \
+  --idempotency-key draft-scheduled-01 --json
+sau article pending --page 1 --page-size 20 --json
+sau article reschedule TASK_ID --publish-at "2030-01-03T18:00:00" \
+  --timezone Asia/Tokyo --schedule-revision 0 --json
+sau article cancel TASK_ID --schedule-revision 1 --json
+```
+
+示例时间需要替换为实际未来时间。`--schedule-revision` 使用最新 `pending` 或 `status` 返回的 `schedule_revision`，初始为 `0`，每次改期或取消递增；陈旧版本返回 `409`，避免覆盖其他窗口或 CLI 的修改。取消后需要重新提交时使用新的幂等键；复用原键只查询原批次，不会恢复取消的任务。
+
+多账号目标文件可为每个目标单独指定 `schedule`；API 顶层 `schedule` 是批次的公共默认值，目标的 `schedule:null` 明确表示立即发布：
+
+```json
+[
+  {"platform":"zhihu","account_id":1,"schedule":{"publish_at":"2030-01-02T10:00:00","timezone":"Asia/Shanghai"}},
+  {"platform":"xiaohongshu","account_id":2,"schedule":{"publish_at":"2030-01-03T18:00:00","timezone":"Asia/Tokyo"},"overrides":{"options":{"flatten_content":true}}},
+  {"platform":"douyin","account_id":3,"schedule":null}
+]
+```
+
+`schedule` 必须为包含 `publish_at` 和 `timezone` 的对象，时间必须包含日期和时分且晚于当前时间。服务器统一保存 UTC，不使用服务器或浏览器的默认时区推断。带 UTC 偏移的时间必须与所选时区相符；夏令时跳过的时间会被拒绝，回拨重复时间需通过 API/CLI 明确偏移，例如 `2030-11-03T01:30:00-04:00` 与 `America/New_York`。完整依赖含 `tzdata`，Windows 或无系统时区数据库的机器也可使用这些时区。
+
+旧视频参数 `publish_date` / `enableTimer`、旧文章兼容入口、平台 `overrides` / `options` 内的原生定时参数继续拒绝。排期不能藏在平台内容覆盖项中。无效时间、预览排期或未知 / 不可用平台的排期会使请求整体返回 `400`，不会悄悄将其他账号立即发布。普通内容校验仍按账号独立记录结果。各平台的标题、封面、话题、声明、商品、双封面等要求，以及富文本转图片笔记时的明确转换选择，均沿用立即发布校验；创建排期不会自动补选或忽略这些字段。公众号等平台仍可能在到期执行时要求管理员扫码或其他人工操作，遇到这种情况会按实际阶段记录为需处理或结果待确认。
 
 ## 原稿与图片
 
@@ -335,7 +369,7 @@ sau article capabilities --json
 
 小红书商家号使用[商家后台](https://ark.xiaohongshu.com/ark/home)和[商品笔记入口](https://ark.xiaohongshu.com/app-note/publish)，通过 `customer.xiaohongshu.com` 独立登录。账号须具有店铺与商品笔记权限。`options.shop_name` 填后台显示的完整店铺名称，`options.product_id` 填要关联的准确商品 ID。店铺不匹配、商品无法精确匹配或关联卡片无法核对时返回 `needs_action`。普通小红书创作者账号与商家号分别管理，不能将普通账号会话视为商家登录依据。
 
-淘宝光合使用[光合创作者平台](https://creator.guanghe.taobao.com/)的「图文」入口，首图作为封面。素材库中只选择本任务新上传的图片，不复用同名历史素材，并核对图集地址与本次素材卡片地址一致；平台改变缩略图地址格式而无法一致核对时会停止。`options.statement` 必须明确选择「内容无需标注」「含AI生成内容」「含虚构演绎内容」「内容为转载」「个人观点，仅供参考」或「内容含营销信息」。当前不支持话题、商品关联、音乐、品牌或定时发布，不会自动选择这些字段。
+淘宝光合使用[光合创作者平台](https://creator.guanghe.taobao.com/)的「图文」入口，首图作为封面。素材库中只选择本任务新上传的图片，不复用同名历史素材，并核对图集地址与本次素材卡片地址一致；平台改变缩略图地址格式而无法一致核对时会停止。`options.statement` 必须明确选择「内容无需标注」「含AI生成内容」「含虚构演绎内容」「内容为转载」「个人观点，仅供参考」或「内容含营销信息」。当前不支持话题、商品关联、音乐、品牌或平台原生定时，不会自动选择这些字段；可以通过 PostSail 后端排期到点执行立即发布。
 
 下列目标示例使用占位账号和素材 ID；请替换为服务返回值，声明按文章实际情况选择。
 
@@ -371,6 +405,8 @@ sau article status BATCH_ID --wait --timeout 300 --json
 
 | 状态 | 含义与后续动作 |
 | --- | --- |
+| `scheduled` | 排期已持久化，尚未到点或等待执行器；支持改期和取消 |
+| `cancelled` | 用户已取消，未提交平台；不自动恢复或重试 |
 | `queued` | 后端已接收任务，尚未开始；并不代表平台已发表 |
 | `running` | 浏览器正在准备、校验或提交内容 |
 | `needs_action` | 登录、权限、格式或选项准备失败，或平台需要人工验证；先检查 `submit_started`，再按记录允许的操作处理 |
@@ -380,7 +416,7 @@ sau article status BATCH_ID --wait --timeout 300 --json
 | `failed` | 提交前或明确拒绝导致失败，可按提示安全重试 |
 | `unknown` | 提交后的超时、失联或中断导致结果待确认；禁止直接再次发布 |
 
-`status --wait` 每 2 秒查询一次，只等待 `queued` / `running`；全部目标都不再排队和执行时结束等待，返回预览完成、审核中、需要处理或待确认等实际状态。某个账号需要处理时，其余排队目标继续执行。等待超时退出码为 `2`，任务仍在后台执行；其他命令 API 调用成功退出 `0`，执行或 API 失败退出 `1`。命令语法错误由参数解析器输出帮助并退出 `2`。查询退出码 `0` 表示成功读到记录，需要同时检查每个任务状态。
+`status --wait` 每 2 秒查询一次，等待 `scheduled` / `queued` / `running`；全部目标都不再等待或执行时结束等待，返回预览完成、审核中、已取消、需要处理或待确认等实际状态。某个账号需要处理时，其余排队目标继续执行。等待超时退出码为 `2`，任务仍在后台执行；其他命令 API 调用成功退出 `0`，执行或 API 失败退出 `1`。命令语法错误由参数解析器输出帮助并退出 `2`。查询退出码 `0` 表示成功读到记录，需要同时检查每个任务状态。
 
 一个任务失败只重试这个任务，继续使用原任务快照：
 
@@ -425,7 +461,10 @@ sau article resolve TASK_ID --resolution not_published --note "已核对平台�
 | `PATCH /api/articles/{id}` | 原稿字段及必须的 `expected_revision`；修订冲突拒绝更新 |
 | `GET /api/article-accounts` | 已登记文章平台的已有账号，含 `id,platform,user_name,status`，不返回 Cookie 路径；CLI 在客户端按 `--platform` 筛选 |
 | `GET /api/article-capabilities` | `data={"platforms":[...]}`；标题、封面、格式、`option_fields`、`permission_check`、`verification`、`scheduled` 与 `live_verified`；新增平台还公开 `available`、`reason`、`title_limit_confirmed`、`cover_supported` 等约束；`available:false` 的平台不能执行预览或发布，`type:asset` 的选项使用已上传素材 ID |
-| `POST /api/articles/{id}/publish` | `revision,targets,mode,idempotency_key`；返回批次与各账号任务 |
+| `POST /api/articles/{id}/publish` | `revision,targets,mode,idempotency_key`；可选顶层或每目标 `schedule`；返回批次与各账号任务 |
+| `GET /api/article-publish-tasks?page=1&page_size=50` | 所有原稿尚未开始的发布任务，`data={items,total,page,page_size}`；`page_size` 为 1–100，默认 50；项目后台未启动 worker 时仍可查询 |
+| `PATCH /api/article-publish-tasks/{id}/schedule` | `schedule,expected_schedule_revision`；可用平台尚未开始执行的文章 / 图文任务可改期 |
+| `POST /api/article-publish-tasks/{id}/cancel` | `expected_schedule_revision`；取消尚未开始执行的发布任务，不撤回平台内容 |
 | `GET /api/article-publish-batches/{id}` | 批次、各账号状态、错误、截图和平台链接 |
 | `GET /api/article-publish-batches?article_id={id}` | 查询某一原稿的批次记录；省略参数则查询全部近期批次 |
 | `POST /api/article-publish-tasks/{id}/retry` | 安全重试原任务；待确认或已成功任务不能直接重试 |
@@ -446,9 +485,9 @@ sau article resolve TASK_ID --resolution not_published --note "已核对平台�
 }
 ```
 
-直接调用发布 API 时必须提供 `idempotency_key`，也可以通过 `Idempotency-Key` 请求头传入。正文清理后的 HTML 保存在 `content_html`；创建原稿的 `format` 默认是 `html`，CLI 根据文件自动确定格式。修改时 `expected_revision` 必须等于当前修订。发布时非零或非空的 `schedule`、`publish_date`、`enableTimer` 明确返回 HTTP `400`；不支持静默改成立即发布。
+直接调用发布 API 时必须提供 `idempotency_key`，也可以通过 `Idempotency-Key` 请求头传入。正文清理后的 HTML 保存在 `content_html`；创建原稿的 `format` 默认是 `html`，CLI 根据文件自动确定格式。修改时 `expected_revision` 必须等于当前修订。排期使用本节定义的 `schedule` 对象；旧 `publish_date`、`enableTimer` 明确返回 HTTP `400`，不会静默改成立即发布。
 
-任务结果包含 `id,status,stage,message,attempts,submit_started,retry_allowed,platform_id,platform_url,platform_status,evidence` 等公共字段。`evidence` 是该任务的服务相对链接。只有已取得平台依据才记录 `submitted` 或 `published`；自动浏览器适配器的真实账号验收仍需逐平台完成。
+任务结果包含 `id,status,stage,message,attempts,submit_started,retry_allowed,platform_id,platform_url,platform_status,evidence` 等公共字段，以及 `scheduled_at`（UTC，立即发布为 null）、`schedule_timezone`、`schedule_revision`、`reschedule_allowed`、`cancel_allowed`。待发布列表额外提供任务快照标题 `title`，不返回 Cookie 或内部快照。能力接口的 `scheduled` / `schedule_mode:server` 表示后端排期能力，不代表已完成真实定时发布验收。`evidence` 是该任务的服务相对链接。只有已取得平台依据才记录 `submitted` 或 `published`；自动浏览器适配器的真实账号验收仍需逐平台完成。
 
 每个“平台 + 账号”独立保存状态，执行器串行领取任务。任务内容使用提交时的快照；原稿后续编辑不会改变它。服务重启后，排队任务继续执行；提交前中断允许安全重试，提交后中断进入 `unknown`，防止重复发表。
 
@@ -471,6 +510,7 @@ SQLite 通过增量建表增加 `articles`、`article_assets`、`article_asset_r
 | 验证层 | 实际验证内容 |
 | --- | --- |
 | API / CLI | 临时 SQLite、Flask 路由、模拟平台回执；原稿修订、图片保护、快照、幂等、平台注册、单账号失败、安全重试及服务中断恢复 |
+| 后端排期 | 受控时钟与临时 SQLite；28 平台独立账号和执行器工厂校验、正文与素材顺序、商品和双封面选项冻结、按账号到期执行、时区及夏令时、迁移、重启恢复、到期会话失效、改期取消竞争与版本冲突；真实平台定时发布尚未执行 |
 | 浏览器适配 | 本地 Chrome 受控页面；富文本粘贴、原生表格 / 代码、PNG 回退、长块分段、图片上传和错位阻止、标题 / 声明 / 话题读回、预览禁止提交 |
 | 原生文章提交边界 | 受控 mock；未知平台拒绝、歧义按钮拒绝、持久化失败不点击、点击异常不重试、微博下一步 / 最终发布分别处理、默认配套微博文字读回 |
 | 网页 | 隔离后端与假账号；保存刷新、正文图 / 封面、留空继承、重复点击、失败隔离、宽窄屏布局与浏览器错误检查 |

@@ -8,6 +8,7 @@ import logging
 import threading
 import time
 import uuid
+from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -17,9 +18,10 @@ from .model import (ArticleError, PLATFORMS, clean_content, image_references, va
                     validate_platform_content, validate_platform_cover, option_asset_ids,
                     validate_option_asset, validate_title_characters)
 from .store import ArticleStore, encode
+from .scheduling import normalize_schedule, supports_server_schedule
 from utils.account_bindings import AccountBindingError, account_identity, require_account_platform
 
-BLOCK_DUPLICATES = {"queued", "running", "needs_action", "submitted", "published", "unknown"}
+BLOCK_DUPLICATES = {"scheduled", "queued", "running", "needs_action", "submitted", "published", "unknown"}
 
 
 class ResolveImages(HTMLParser):
@@ -221,7 +223,7 @@ class ArticleService:
         if "ai_generated" in options and not isinstance(options["ai_generated"], bool):
             raise ArticleError("AI 内容声明必须为布尔值")
         if any(config.get(field) for config in (effective, options) for field in ("schedule", "publish_date", "enableTimer")):
-            raise ArticleError("首版文章仅支持立即发布，不支持定时")
+            raise ArticleError("平台覆盖项不支持定时参数，请使用目标级 schedule 设置后端排期")
         title = effective.get("title") or article["title"]
         if not isinstance(title, str):
             raise ArticleError("平台标题必须为文本")
@@ -277,8 +279,8 @@ class ArticleService:
         """一个原稿修订形成一个批次，每个目标账号各自校验和执行。"""
         if not isinstance(data, dict):
             raise ArticleError("发布参数必须为 JSON 对象")
-        if data.get("schedule") or data.get("publish_date") or data.get("enableTimer"):
-            raise ArticleError("首版文章仅支持立即发布，不支持定时")
+        if data.get("publish_date") or data.get("enableTimer"):
+            raise ArticleError("旧定时参数不受支持，请使用 schedule.publish_at 和 schedule.timezone")
         mode = data.get("mode", "publish")
         targets = data.get("targets")
         key = data.get("idempotency_key")
@@ -292,8 +294,23 @@ class ArticleService:
         revision = data.get("revision")
         if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
             raise ArticleError("发布请求必须提供正整数 revision")
-        request_hash = hashlib.sha256(encode({"article_id": article_id, "revision": revision,
-                                            "mode": mode, "targets": targets}).encode()).hexdigest()
+        default_schedule = normalize_schedule(data.get("schedule"))
+        if default_schedule[0] and mode != "publish":
+            raise ArticleError("平台预览不能排期，请移除 schedule 后立即预览")
+        schedules = []
+        for target in targets:
+            scheduled_at, zone = normalize_schedule(target["schedule"]) if "schedule" in target else default_schedule
+            if scheduled_at:
+                if mode != "publish":
+                    raise ArticleError("平台预览不能排期，请移除 schedule 后立即预览")
+                if not supports_server_schedule(target.get("platform")):
+                    raise ArticleError("不支持或暂不可用的平台不能排期，请先确认平台发布能力")
+            schedules.append((scheduled_at, zone))
+        # 不增加空排期字段，已有立即发布请求的幂等摘要保持兼容。
+        identity = {"article_id": article_id, "revision": revision, "mode": mode, "targets": targets}
+        if data.get("schedule") is not None:
+            identity["schedule"] = data["schedule"]
+        request_hash = hashlib.sha256(encode(identity).encode()).hexdigest()
         with self.store.connect(write=True) as conn:
             existing = conn.execute("SELECT * FROM article_publish_batches WHERE idempotency_key=?", (key,)).fetchone()
             if existing:
@@ -307,11 +324,13 @@ class ArticleService:
                 live = conn.execute("SELECT revision FROM articles WHERE id=?", (article_id,)).fetchone()
                 if live["revision"] != revision:
                     raise ArticleError("文章已更新，请重新读取后发布", 409)
-                batch_id, now = uuid.uuid4().hex, utc_now()
+                batch_id, now = uuid.uuid4().hex, datetime.fromisoformat(utc_now()).isoformat(timespec="microseconds")
+                if any(scheduled_at and scheduled_at <= now for scheduled_at, _ in schedules):
+                    raise ArticleError("发布时间必须晚于当前时间；已到期任务请查询原批次")
                 conn.execute("INSERT INTO article_publish_batches VALUES (?,?,?,?,?,?,?)",
                              (batch_id, article_id, revision, mode, key, request_hash, now))
                 seen = set()
-                for target in targets:
+                for target, (scheduled_at, zone) in zip(targets, schedules):
                     platform, account_id = target.get("platform"), target.get("account_id")
                     if (not isinstance(platform, str) or platform not in PLATFORMS or
                             not isinstance(account_id, int) or isinstance(account_id, bool) or account_id < 1):
@@ -320,6 +339,8 @@ class ArticleService:
                         raise ArticleError("同一批次不能重复选择同一账号")
                     seen.add((platform, account_id))
                     task_id, status, message = uuid.uuid4().hex, "queued", "等待执行"
+                    if scheduled_at:
+                        status, message = "scheduled", "等待排期时间，到点开始提交"
                     snapshot = {"platform": platform, "mode": mode, "title": article["title"],
                                 "content_html": article["content_html"], "cover_asset_id": article["cover_asset_id"],
                                 "options": {}, "tags": article["tags"]}
@@ -334,10 +355,12 @@ class ArticleService:
                         if any(row["status"] in BLOCK_DUPLICATES for row in duplicates):
                             raise ArticleError("该文章修订在所选账号已有发布或待确认任务，请查看原任务", 409)
                     conn.execute("""INSERT INTO article_publish_tasks
-                        (id,batch_id,article_id,revision,platform,account_id,mode,snapshot_json,status,stage,message,created_at,updated_at)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (id,batch_id,article_id,revision,platform,account_id,mode,snapshot_json,status,stage,message,created_at,updated_at,
+                         scheduled_at,schedule_timezone)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (task_id, batch_id, article_id, revision, platform, account_id, mode,
-                         encode(snapshot), status, "validation" if status == "failed" else "queued", message, now, now))
+                         encode(snapshot), status, "validation" if status == "failed" else status, message, now, now,
+                         scheduled_at, zone))
                     refs = [img.get("data-asset-id") for img in image_references(snapshot["content_html"])]
                     refs.extend(option_asset_ids(platform, snapshot["options"]).values())
                     self.store.refs(conn, "task", task_id, refs + [snapshot.get("cover_asset_id")])
@@ -352,6 +375,9 @@ class ArticleService:
         result["evidence"] = [f"/api/article-publish-tasks/{row['id']}/evidence/{Path(name).name}"
                               for name in json.loads(result.pop("evidence_json"))]
         result["retry_allowed"] = row["status"] in {"failed", "needs_action"} and not row["submit_started"] and row["stage"] != "validation"
+        pending = row["mode"] == "publish" and row["status"] in {"scheduled", "queued"} and not row["submit_started"]
+        result["cancel_allowed"] = pending
+        result["reschedule_allowed"] = pending and supports_server_schedule(row["platform"])
         return result
 
     def get_batch(self, batch_id):
@@ -373,6 +399,56 @@ class ArticleService:
                                 (article_id, article_id)).fetchall()
         return [self.get_batch(row["id"]) for row in rows]
 
+    def pending_tasks(self, page=1, page_size=50):
+        """跨原稿查看尚未执行的发布任务，按预计开始时间分页。"""
+        try:
+            page, page_size = int(page), int(page_size)
+        except (TypeError, ValueError) as exc:
+            raise ArticleError("分页参数必须为正整数") from exc
+        if not 1 <= page <= 2147483647 or not 1 <= page_size <= 100:
+            raise ArticleError("page 必须为 1–2147483647，page_size 必须为 1–100")
+        where = "mode='publish' AND status IN ('scheduled','queued') AND submit_started=0"
+        with self.store.connect() as conn:
+            total = conn.execute(f"SELECT COUNT(*) FROM article_publish_tasks WHERE {where}").fetchone()[0]
+            rows = conn.execute(f"""SELECT * FROM article_publish_tasks WHERE {where}
+                ORDER BY COALESCE(scheduled_at,created_at),created_at,id LIMIT ? OFFSET ?""",
+                (page_size, (page - 1) * page_size)).fetchall()
+            items = [{**self.task(row), "title": json.loads(row["snapshot_json"])["title"]} for row in rows]
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+    def change_schedule(self, task_id, data, *, cancel=False):
+        """改期和取消与执行器认领使用同一个写锁，已执行任务不能被撤回。"""
+        if not isinstance(data, dict):
+            raise ArticleError("排期参数必须为 JSON 对象")
+        revision = data.get("expected_schedule_revision")
+        if not isinstance(revision, int) or isinstance(revision, bool) or revision < 0:
+            raise ArticleError("请提供非负整数 expected_schedule_revision，避免覆盖其他入口的排期修改")
+        scheduled_at, zone = (None, "") if cancel else normalize_schedule(data.get("schedule"))
+        if not cancel and not scheduled_at:
+            raise ArticleError("改期必须提供 schedule.publish_at 和 schedule.timezone")
+        with self.store.connect(write=True) as conn:
+            row = conn.execute("SELECT * FROM article_publish_tasks WHERE id=?", (task_id,)).fetchone()
+            if not row:
+                raise ArticleError("任务不存在", 404)
+            public = self.task(row)
+            if not public["cancel_allowed"] or (not cancel and not public["reschedule_allowed"]):
+                raise ArticleError("任务已开始执行或不支持此操作，请刷新任务状态", 409)
+            if row["schedule_revision"] != revision:
+                raise ArticleError("排期已在其他入口修改，请刷新后操作", 409)
+            now = datetime.fromisoformat(utc_now()).isoformat(timespec="microseconds")
+            if not cancel and scheduled_at <= now:
+                raise ArticleError("新的发布时间必须晚于当前时间")
+            if cancel:
+                conn.execute("""UPDATE article_publish_tasks SET status='cancelled',stage='cancelled',message='已取消，未提交平台',
+                    schedule_revision=schedule_revision+1,updated_at=? WHERE id=?""", (now, task_id))
+            else:
+                conn.execute("""UPDATE article_publish_tasks SET status='scheduled',stage='scheduled',
+                    message='排期已更新，等待到点提交',scheduled_at=?,schedule_timezone=?,
+                    schedule_revision=schedule_revision+1,updated_at=? WHERE id=?""", (scheduled_at, zone, now, task_id))
+            batch_id = row["batch_id"]
+        self.wakeup.set()
+        return self.get_batch(batch_id)
+
     def retry(self, task_id):
         """只重试确定尚未提交的账号；原快照不能被新稿件替换。"""
         with self.store.connect(write=True) as conn:
@@ -387,8 +463,10 @@ class ArticleService:
                     (task_id, row["article_id"], row["revision"], row["account_id"], row["platform"]))
                 if any(other["status"] in BLOCK_DUPLICATES for other in others):
                     raise ArticleError("该账号另有发布或待确认任务，禁止重复重试", 409)
-            conn.execute("UPDATE article_publish_tasks SET status='queued',stage='queued',message='等待重试',updated_at=? WHERE id=?",
-                         (utc_now(), task_id))
+            now = datetime.fromisoformat(utc_now()).isoformat(timespec="microseconds")
+            state = "scheduled" if row["scheduled_at"] and row["scheduled_at"] > now else "queued"
+            conn.execute("UPDATE article_publish_tasks SET status=?,stage=?,message='等待重试',updated_at=? WHERE id=?",
+                         (state, state, now, task_id))
             batch_id = row["batch_id"]
         self.wakeup.set()
         return self.get_batch(batch_id)
@@ -478,7 +556,10 @@ class ArticleService:
         with self.store.connect(write=True) as conn:
             if not self.owns_lease(conn):
                 return False
-            row = conn.execute("SELECT * FROM article_publish_tasks WHERE status='queued' ORDER BY created_at,id LIMIT 1").fetchone()
+            row = conn.execute("""SELECT * FROM article_publish_tasks WHERE status IN ('queued','scheduled')
+                AND (scheduled_at IS NULL OR scheduled_at<=?)
+                ORDER BY COALESCE(scheduled_at,created_at),created_at,id LIMIT 1""",
+                (datetime.fromisoformat(utc_now()).isoformat(timespec="microseconds"),)).fetchone()
             if not row:
                 return False
             task = dict(row)

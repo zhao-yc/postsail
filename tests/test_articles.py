@@ -1010,7 +1010,7 @@ class ArticlesTest(unittest.TestCase):
         self.assertEqual(client.patch(f'/api/articles/{self.article["id"]}', json={"expected_revision": 0}).status_code, 409)
         caps = client.get("/api/article-capabilities").json["data"]["platforms"]
         self.assertEqual(len(caps), 28)
-        self.assertTrue(all(not item["scheduled"] for item in caps))
+        self.assertTrue(all(item["scheduled"] for item in caps))
 
 
     def test_new_image_text_platforms_preflight_in_same_batch(self):

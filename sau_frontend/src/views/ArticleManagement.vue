@@ -97,11 +97,21 @@
           <p v-if="platform.permission_check" class="capability-note">{{ platform.permission_check }}</p>
           <div v-if="accountsFor(platform.platform).length" class="account-options">
             <div v-for="account in accountsFor(platform.platform)" :key="account.id" class="account-option">
-              <el-checkbox :disabled="platform.available === false" :model-value="selectedAccountIds.includes(account.id)" @change="toggleAccount(account, $event)">{{ account.user_name }}</el-checkbox>
+              <el-checkbox :disabled="platform.available === false || publishing" :model-value="selectedAccountIds.includes(account.id)" @change="toggleAccount(account, $event)">{{ account.user_name }}</el-checkbox>
               <span :class="['account-health', { invalid: !accountIsValid(account) }]">{{ accountIsValid(account) ? '已登录' : '需校验登录' }}</span>
             </div>
           </div>
           <p v-else-if="platform.available !== false" class="empty-account">暂无账号，<router-link to="/account-management">前往添加</router-link></p>
+          <template v-if="!previewMode && platform.scheduled">
+            <div v-for="account in selectedFor(platform.platform)" :key="`schedule-${account.id}`" class="account-schedule">
+              <strong>{{ account.user_name }} · 发布时间</strong>
+              <el-radio-group v-model="targetSchedules[account.id].enabled" size="small" :disabled="publishing">
+                <el-radio-button :value="false">立即发布</el-radio-button><el-radio-button :value="true">定时发布</el-radio-button>
+              </el-radio-group>
+              <PublicationSchedule v-if="targetSchedules[account.id].enabled" v-model="targetSchedules[account.id]" :disabled="publishing" />
+            </div>
+          </template>
+          <p v-else-if="!previewMode && selectedFor(platform.platform).length" class="capability-note">{{ platform.schedule_reason || '此平台当前仅支持立即发布。' }}</p>
           <details v-for="account in selectedFor(platform.platform)" :key="account.id" class="target-overrides">
             <summary>{{ account.user_name }} · 个性化设置</summary>
             <label>平台标题</label><el-input v-model="targetConfigs[account.id].title" :placeholder="form.title || '沿用文章标题'" @input="markDirty" />
@@ -155,26 +165,45 @@
           </details>
         </div>
         <div class="publish-controls">
-          <el-switch v-model="previewMode" active-text="仅预览，不点击发布" />
+          <el-switch v-model="previewMode" :disabled="publishing" active-text="仅预览，不点击发布" />
           <p v-if="previewMode" class="preview-note">平台可能自动保存草稿；预览完成不代表已发布。</p>
           <el-button type="primary" :loading="publishing" :disabled="!selectedAccountIds.length || !!loadError || uploading" class="publish-button" @click="submitPublication">
-            {{ previewMode ? '提交平台预览' : `发布到 ${selectedAccountIds.length || '所选'} 个账号` }}
+            {{ previewMode ? '提交平台预览' : scheduledCount ? `提交发布计划（${scheduledCount} 个定时）` : `发布到 ${selectedAccountIds.length || '所选'} 个账号` }}
           </el-button>
-          <p class="publish-note">{{ previewMode ? '预览结果会保留在下方记录中。' : '保存当前修订后直接发布，各账号独立执行。' }}</p>
+          <p class="publish-note">{{ previewMode ? '预览结果会保留在下方记录中。' : scheduledCount ? '排期保存当前内容，之后编辑原稿不会改变任务。其余账号将立即发布。' : '保存当前修订后直接发布，各账号独立执行。' }}</p>
+          <p v-if="scheduledCount" class="publish-note">后端需持续运行；恢复运行后会继续执行已到期的排期。</p>
         </div>
       </aside>
     </div>
+
+    <section class="history-panel pending-panel">
+      <div class="history-heading"><div><h2>待发布 <span class="pending-count">{{ pendingTotal }}</span></h2><p>汇总所有文章的排期和排队任务；改期保留原内容，取消只对尚未执行的任务生效。</p></div><el-button text :loading="pendingLoading" @click="refreshPending">刷新列表</el-button></div>
+      <el-alert v-if="pendingError" :title="pendingError" type="error" :closable="false" />
+      <div v-if="!pendingTasks.length && !pendingLoading && !pendingError" class="history-empty">暂无待发布任务，可为已选择的平台账号设置定时发布。</div>
+      <div v-for="task in pendingTasks" :key="task.id" class="task-row pending-row">
+        <div class="pending-content"><strong>{{ task.title }}</strong><small>{{ platformLabel(task.platform) }} · {{ accountLabel(task.account_id) }} · 修订 {{ task.revision }}</small></div>
+        <el-tag :type="statusType(task.status)">{{ statusLabel(task.status) }}</el-tag>
+        <div class="task-detail"><span>{{ formatSchedule(task) }}</span><small v-if="task.scheduled_at && new Date(task.scheduled_at).getTime() <= Date.now()">已到期，等待执行器</small></div>
+        <div class="task-actions">
+          <el-button v-if="task.reschedule_allowed" text type="primary" :disabled="scheduleChanging" @click="openReschedule(task)">改期</el-button>
+          <el-button v-if="task.cancel_allowed" text type="danger" :disabled="scheduleChanging" @click="cancelTask(task)">取消发布</el-button>
+        </div>
+      </div>
+      <el-pagination v-if="pendingTotal > pendingPageSize" v-model:current-page="pendingPage" :page-size="pendingPageSize" :total="pendingTotal" layout="prev, pager, next" @current-change="refreshPending" class="pending-pagination" />
+    </section>
 
     <section class="history-panel">
       <div class="history-heading"><div><h2>发布记录</h2><p>平台受理、公开发表与结果不确定分别记录。</p></div><el-button text :loading="refreshing" :disabled="!form.id" @click="refreshBatches">刷新记录</el-button></div>
       <div v-if="!batches.length" class="history-empty">提交文章后，这里会显示每个平台账号的实际进度。</div>
       <article v-for="batch in batches" :key="batch.id" class="batch-record">
-        <div class="batch-heading"><span>修订 {{ batch.revision }} · {{ batch.mode === 'preview' ? '平台预览' : '直接发布' }}</span><span>{{ formatTime(batch.created_at) }}</span></div>
+        <div class="batch-heading"><span>修订 {{ batch.revision }} · {{ batch.mode === 'preview' ? '平台预览' : batch.tasks?.some((task) => task.scheduled_at) ? '发布计划' : '直接发布' }}</span><span>{{ formatTime(batch.created_at) }}</span></div>
         <div v-for="task in batch.tasks || []" :key="task.id" class="task-row">
           <div class="task-identity"><strong>{{ platformLabel(task.platform) }}</strong><span>{{ accountLabel(task.account_id) }}</span></div>
           <el-tag :type="statusType(task.status)" effect="light">{{ statusLabel(task.status) }}</el-tag>
-          <div class="task-detail"><span>{{ task.message || stageLabel(task.stage) }}</span><small v-if="task.platform_status">平台状态：{{ task.platform_status }}</small></div>
+          <div class="task-detail"><span>{{ task.message || stageLabel(task.stage) }}</span><small v-if="task.scheduled_at">排期：{{ formatSchedule(task) }}</small><small v-if="task.platform_status">平台状态：{{ task.platform_status }}</small></div>
           <div class="task-actions">
+            <el-button v-if="task.reschedule_allowed" text type="primary" size="small" :disabled="scheduleChanging" @click="openReschedule(task)">改期</el-button>
+            <el-button v-if="task.cancel_allowed" text type="danger" size="small" :disabled="scheduleChanging" @click="cancelTask(task)">取消发布</el-button>
             <el-link v-if="safePlatformUrl(task.platform_url)" :href="task.platform_url" target="_blank" rel="noopener noreferrer">平台内容</el-link>
             <el-button v-if="task.evidence?.length" text size="small" @click="showEvidence(task)">查看证据</el-button>
             <el-button v-if="task.retry_allowed && ['failed', 'needs_action'].includes(task.status)" text type="primary" size="small" @click="retryTask(task)">{{ task.status === 'needs_action' ? '完成操作后重试' : '重试此账号' }}</el-button>
@@ -185,6 +214,11 @@
       </article>
     </section>
 
+    <el-dialog v-model="rescheduleVisible" title="修改发布时间" width="min(480px, calc(100vw - 24px))" :close-on-click-modal="!scheduleChanging" :close-on-press-escape="!scheduleChanging" :show-close="!scheduleChanging">
+      <p class="dialog-note">{{ accountLabel(rescheduleTask?.account_id) }} · 改期使用原任务内容，后续原稿修改不会应用到这个任务。</p>
+      <PublicationSchedule v-model="editedSchedule" :disabled="scheduleChanging" />
+      <template #footer><el-button :disabled="scheduleChanging" @click="rescheduleVisible = false">返回</el-button><el-button type="primary" :loading="scheduleChanging" @click="saveReschedule">保存排期</el-button></template>
+    </el-dialog>
     <el-dialog v-model="importVisible" title="导入文章内容" width="min(660px, calc(100vw - 24px))">
       <p class="dialog-note">导入会替换当前正文。图片会在保存时导入为本地素材。</p>
       <el-radio-group v-model="importFormat"><el-radio-button value="markdown">Markdown</el-radio-button><el-radio-button value="html">HTML</el-radio-button><el-radio-button value="text">纯文本</el-radio-button></el-radio-group>
@@ -227,6 +261,8 @@ import StarterKit from '@tiptap/starter-kit'
 import Image from '@tiptap/extension-image'
 import { TableKit } from '@tiptap/extension-table'
 import { articleUrl, articlesApi } from '@/api/articles'
+import PublicationSchedule from '@/components/articles/PublicationSchedule.vue'
+import { defaultSchedule, formatSchedule, scheduleForTask, schedulePayload } from '@/utils/articleSchedule'
 
 const articles = ref([])
 const accounts = ref([])
@@ -247,6 +283,19 @@ const revisionConflict = ref(false)
 const tagsInput = ref('')
 const selectedAccountIds = ref([])
 const targetConfigs = reactive({})
+const targetSchedules = reactive({})
+const scheduledCount = computed(() => previewMode.value ? 0 : selectedAccountIds.value.filter((id) => targetSchedules[id]?.enabled).length)
+const pendingTasks = ref([])
+const pendingTotal = ref(0)
+const pendingPage = ref(1)
+const pendingPageSize = 20
+const pendingLoading = ref(false)
+const pendingError = ref('')
+const rescheduleVisible = ref(false)
+const rescheduleTask = ref(null)
+const editedSchedule = ref(defaultSchedule())
+const scheduleChanging = ref(false)
+let pendingFetchSequence = 0
 const coverInput = ref(null)
 const importVisible = ref(false)
 const importFormat = ref('markdown')
@@ -365,7 +414,7 @@ function formatTime(value) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 function statusLabel(status) {
-  return ({ queued: '等待执行', running: '执行中', needs_action: '需要人工操作', previewed: '预览完成', submitted: '平台已受理', published: '已公开发表', failed: '执行失败', unknown: '结果不确定' })[status] || status
+  return ({ scheduled: '等待排期', cancelled: '已取消', queued: '等待执行', running: '执行中', needs_action: '需要人工操作', previewed: '预览完成', submitted: '平台已受理', published: '已公开发表', failed: '执行失败', unknown: '结果不确定' })[status] || status
 }
 function statusType(status) {
   if (['published', 'previewed'].includes(status)) return 'success'
@@ -388,6 +437,7 @@ function toggleAccount(account, selected) {
   if (selected && platform?.available === false) return
   if (selected) {
     selectedAccountIds.value = [...new Set([...selectedAccountIds.value, account.id])]
+    if (!targetSchedules[account.id]) targetSchedules[account.id] = { ...defaultSchedule(), enabled: false }
     if (!targetConfigs[account.id]) {
       const defaults = form.platform_options[account.platform] || {}
       targetConfigs[account.id] = { title: defaults.title || '', cover_asset_id: defaults.cover_asset_id || null, tags_text: (defaults.tags || []).join('，'), tags_mode: Array.isArray(defaults.tags) ? (defaults.tags.length ? 'custom' : 'clear') : 'inherit', options: { ...(defaults.options || {}) }, option_modes: {} }
@@ -434,6 +484,7 @@ async function createDraft() {
   batches.value = []
   selectedAccountIds.value = []
   Object.keys(targetConfigs).forEach((key) => delete targetConfigs[key])
+  Object.keys(targetSchedules).forEach((key) => delete targetSchedules[key])
   dirty.value = false
   revisionConflict.value = false
 }
@@ -460,6 +511,7 @@ async function openArticle(id) {
     batches.value = []
     selectedAccountIds.value = []
     Object.keys(targetConfigs).forEach((key) => delete targetConfigs[key])
+    Object.keys(targetSchedules).forEach((key) => delete targetSchedules[key])
     await refreshBatches()
   } catch { /* 请求拦截器统一展示错误，当前稿件保持不变。 */ }
 }
@@ -566,10 +618,26 @@ function submissionKey(articleId, payload) {
   try { sessionStorage.setItem(storageKey, JSON.stringify(entries.slice(-100))) } catch { /* 后端修订与目标去重继续保护重复提交。 */ }
   return key
 }
+function forgetCancelledKeys(records) {
+  // 只有所有目标都明确取消才结束旧操作；提交中、未知结果和部分取消继续保留原键。
+  const cancelledKeys = new Set(records.filter((batch) => batch.tasks?.length && batch.tasks.every((task) => task.status === 'cancelled')).map((batch) => batch.idempotency_key))
+  if (!cancelledKeys.size) return
+  try {
+    const storageKey = 'omnipost:article-publication-keys'
+    const entries = JSON.parse(sessionStorage.getItem(storageKey) || '[]')
+    sessionStorage.setItem(storageKey, JSON.stringify(entries.filter((entry) => !cancelledKeys.has(entry.key))))
+  } catch { /* 存储不可用时，后端仍校验修订及目标重复。 */ }
+}
 async function submitPublication() {
   if (publishing.value || saving.value || !selectedAccountIds.value.length) return
   publishing.value = true
   try {
+    const schedules = {}
+    if (!previewMode.value) {
+      try {
+        selectedAccountIds.value.forEach((id) => { if (targetSchedules[id]?.enabled) schedules[id] = schedulePayload(targetSchedules[id]) })
+      } catch (error) { ElMessage.warning(error.message); return }
+    }
     if (dirty.value || !form.id) {
       const saved = await saveArticle()
       if (!saved) return
@@ -582,15 +650,15 @@ async function submitPublication() {
       const overrides = { title: config.title.trim() || form.title, cover_asset_id: platform?.cover_supported === false ? null : config.cover_asset_id || form.cover_asset_id || null, options }
       // 沿用时不发送 tags；显式空数组让用户可以清除文章默认话题。
       if (config.tags_mode !== 'inherit') overrides.tags = config.tags_mode === 'clear' ? [] : parseTags(config.tags_text)
-      return { platform: account.platform, account_id: id, overrides }
+      return { platform: account.platform, account_id: id, overrides, ...(schedules[id] ? { schedule: schedules[id] } : {}) }
     })
     // 后端按目标逐项校验并记录失败，单个平台参数不合要求不阻塞其他账号。
     const payload = { revision: form.revision, targets, mode: previewMode.value ? 'preview' : 'publish' }
     const response = await articlesApi.publish(form.id, { ...payload, idempotency_key: submissionKey(form.id, payload) })
     batches.value = [response.data, ...batches.value.filter((batch) => batch.id !== response.data.id)]
     ElMessage.info('任务已提交，实际平台结果会显示在发布记录中')
-    await refreshBatches()
-  } catch { await refreshBatches() }
+    await Promise.all([refreshBatches(), refreshPending()])
+  } catch { await Promise.all([refreshBatches(), refreshPending()]) }
   finally { publishing.value = false }
 }
 // 轮询批次详情；切换稿件后的旧请求不得覆盖新稿件记录。
@@ -603,13 +671,63 @@ async function refreshBatches() {
     const response = await articlesApi.batches(articleId)
     const listed = response.data.items || response.data || []
     const results = await Promise.all(listed.map((batch) => articlesApi.batch(batch.id)))
-    if (form.id === articleId && sequence === batchFetchSequence) batches.value = results.map((item) => item.data)
+    if (form.id === articleId && sequence === batchFetchSequence) {
+      batches.value = results.map((item) => item.data)
+      forgetCancelledKeys(batches.value)
+    }
   } catch { /* 查询失败保留最近一次任务记录，后续刷新继续核对。 */ }
   finally { if (sequence === batchFetchSequence) refreshing.value = false }
 }
 async function retryTask(task) {
-  try { await articlesApi.retry(task.id); ElMessage.info('此账号重试任务已提交'); await refreshBatches() }
+  try { await articlesApi.retry(task.id); ElMessage.info('此账号重试任务已提交'); await Promise.all([refreshBatches(), refreshPending()]) }
   catch { /* 后端再次校验可重试状态。 */ }
+}
+async function refreshPending() {
+  const sequence = ++pendingFetchSequence
+  const page = pendingPage.value
+  pendingLoading.value = true
+  try {
+    const response = await articlesApi.pending(page, pendingPageSize)
+    if (sequence !== pendingFetchSequence || page !== pendingPage.value) return
+    pendingTasks.value = response.data.items
+    pendingTotal.value = response.data.total
+    pendingError.value = ''
+    const lastPage = Math.max(1, Math.ceil(pendingTotal.value / pendingPageSize))
+    if (pendingPage.value > lastPage) { pendingPage.value = lastPage; await refreshPending() }
+  } catch { if (sequence === pendingFetchSequence) pendingError.value = '待发布列表加载失败，请刷新列表。' }
+  finally { if (sequence === pendingFetchSequence) pendingLoading.value = false }
+}
+function openReschedule(task) {
+  rescheduleTask.value = { ...task }
+  editedSchedule.value = scheduleForTask(task)
+  rescheduleVisible.value = true
+}
+async function saveReschedule() {
+  if (scheduleChanging.value || !rescheduleTask.value) return
+  let schedule
+  try { schedule = schedulePayload(editedSchedule.value) }
+  catch (error) { ElMessage.warning(error.message); return }
+  scheduleChanging.value = true
+  try {
+    await articlesApi.reschedule(rescheduleTask.value.id, { schedule, expected_schedule_revision: rescheduleTask.value.schedule_revision })
+    rescheduleVisible.value = false
+    ElMessage.success('排期已更新，原任务内容保留')
+  } catch { /* 版本冲突由接口提示；用户刷新后重新选择任务。 */ }
+  finally { await Promise.all([refreshPending(), refreshBatches()]); scheduleChanging.value = false }
+}
+async function cancelTask(task) {
+  if (scheduleChanging.value) return
+  try {
+    await ElMessageBox.confirm(`取消「${task.title || platformLabel(task.platform)}」向 ${accountLabel(task.account_id)} 的发布？`, '取消发布', { confirmButtonText: '取消发布', cancelButtonText: '保留任务', type: 'warning' })
+  } catch { return }
+  scheduleChanging.value = true
+  try {
+    const response = await articlesApi.cancel(task.id, task.schedule_revision)
+    // 全部目标明确取消后，下一次显式提交可以使用新幂等键；超时仍保留原键。
+    forgetCancelledKeys([response.data])
+    ElMessage.success('任务已取消，未提交平台')
+  } catch { /* 执行器先认领时不能取消，刷新后展示实际状态。 */ }
+  finally { await Promise.all([refreshPending(), refreshBatches()]); scheduleChanging.value = false }
 }
 function showEvidence(task) {
   evidenceUrls.value = task.evidence.map((entry) => articleUrl(typeof entry === 'string' ? entry : entry.url)).filter(Boolean)
@@ -646,8 +764,11 @@ onMounted(async () => {
     accounts.value = accountResponse.data.items || accountResponse.data || []
     capabilities.value = capabilityResponse.data.platforms || []
     if (articles.value.length) { const response = await articlesApi.get(articles.value[0].id); loadArticle(response.data); await refreshBatches() }
+    await refreshPending()
     pollingTimer = window.setInterval(() => {
-      if (!document.hidden && !refreshing.value && batches.value.some((batch) => (batch.tasks || []).some((task) => ['queued', 'running', 'needs_action'].includes(task.status)))) refreshBatches()
+      if (document.hidden) return
+      if (!refreshing.value && batches.value.some((batch) => (batch.tasks || []).some((task) => ['scheduled', 'queued', 'running', 'needs_action'].includes(task.status)))) refreshBatches()
+      if (!pendingLoading.value) refreshPending()
     }, 4000)
   } catch { loadError.value = '文章工作台暂时无法加载，请确认后端已经升级并启动。' }
   finally { initialLoading.value = false }
@@ -740,6 +861,13 @@ h1 { font-family: 'Songti SC', 'Noto Serif CJK SC', serif; font-size: 30px; font
 .option-cover img { width: 54px; height: 72px; object-fit: contain; }
 .option-cover small { flex-basis: 100%; }
 .publish-controls { padding-top: 18px; border-top: 1px solid var(--line); }
+.account-schedule { margin-top: 14px; padding: 12px 0; border-top: 1px dashed var(--line); }
+.account-schedule strong { display: block; font-size: 12px; margin-bottom: 10px; }
+.pending-count { font-size: 13px; font-weight: 400; color: var(--muted); margin-left: 6px; }
+.pending-content { flex: 1; min-width: 160px; overflow-wrap: anywhere; }
+.pending-content strong { display: block; font-size: 13px; }
+.pending-content small { display: block; color: var(--muted); font-size: 11px; margin-top: 7px; }
+.pending-pagination { margin-top: 18px; justify-content: flex-end; }
 .publish-controls :deep(.el-switch__label) { font-size: 12px; }
 .publish-button { width: 100%; margin: 16px 0 9px; background: var(--accent); border-color: var(--accent); }
 .publish-note, .preview-note { font-size: 11px; line-height: 1.7; color: var(--muted); margin: 0; }

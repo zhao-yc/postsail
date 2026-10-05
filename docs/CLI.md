@@ -64,7 +64,7 @@ sau article retry TASK_ID --json
 
 `ARTICLE_ID`、`BATCH_ID`、`TASK_ID` 是服务返回的字符串 ID；账号使用网页账号正整数 ID。`targets.json` 支持 `douyin/bilibili/baijiahao/toutiao/weibo/zhihu/qiehao/sohu`，可覆盖标题、封面、话题和平台 `options`。抖音支持摘要，微博支持导语和配套微博文字，企鹅号提供分类和摘要输入；所有选项以 `capabilities` 返回的 `option_fields` 及实际页面核验为准。正文支持 Markdown、HTML、纯文本，本地图片先上传；官网流程独立。
 
-默认正式立即发布，`--preview` 可选。八平台文章不支持定时请求，不能使用视频命令的 `--schedule`。预览必须完成标题、正文、图片和选项读回才返回 `previewed`。正式操作先持久化 `submit_started`，再进行第一次可能提交的动作；点击超时或多步骤中断不会自动重新发布。`queued` 只表示任务受理，`submitted` 表示平台已接收、可能审核中，`published` 才表示取得已发表依据；`unknown` 必须人工核查后再决定重试。当前真实验收见[文章平台验证记录](./article-platform-verification.md)，不能把代码接入或离线测试通过当作发布成功。
+默认正式立即发布，`--preview` 可选。全部 28 个可用文章 / 图文平台支持 PostSail 后端排期：`--publish-at` 指定所选时区的时间，`--timezone` 默认 `Asia/Shanghai`；多个平台账号可在目标文件中分别指定 `schedule`。预览不接受排期。`sau article pending` 查看所有原稿的待发布任务，`reschedule` / `cancel` 使用 `--schedule-revision` 修改或取消尚未执行的任务，见[定时发布说明](./articles.md#定时发布改期与取消)。旧视频命令的 `--schedule` 不用于此入口。预览必须完成标题、正文、图片和选项读回才返回 `previewed`。正式操作先持久化 `submit_started`，再进行第一次可能提交的动作；点击超时或多步骤中断不会自动重新发布。`scheduled` 表示等待排期，`queued` 只表示任务受理，`submitted` 表示平台已接收、可能审核中，`published` 才表示取得已发表依据；`unknown` 必须人工核查后再决定重试。当前真实验收见[文章平台验证记录](./article-platform-verification.md)，不能把代码接入或离线测试通过当作发布成功。
 
 抖音完整真实预览已通过，正式发布已取得明确提交回执，公开文章已现场核实；其余七个平台缺少验收账号，本轮未验收真实原生话题和声明。抖音正文超链接默认阻止，显式设置 `options.links_as_text:true` 后转成「原文字（完整网址）」并保留原稿与转换稿；准备顺序为先封面、后标题和正文。预览先精确阻断文章创建请求，封面完成后再安装页面按钮与快捷键保护。正式任务被动读取原生文章创建成功响应，记录 `submitted` 和内容 ID，其他任务的审核与公开链接仍须单独核对。
 
@@ -130,7 +130,7 @@ sau bilibili upload-video --account <account_name> --file videos/demo.mp4 --titl
 
 抖音、快手、小红书的图文和视频上传，以及 Bilibili 的视频上传都支持 `--schedule`。只要传了 `--schedule`，CLI 就会自动切换到对应平台的定时发布策略；不传则默认立即发布。
 
-该规则不适用于 `sau article`：八个平台的文章仅支持立即发布，API 收到定时请求会明确拒绝。
+`sau article` 使用独立的后端排期：全部 28 个可用文章 / 图文平台通过 `--publish-at "2030-01-02T10:00:00" --timezone Asia/Shanghai` 或目标文件中的 `schedule` 指定时间。后端需运行，到点开始提交；重启后继续执行已到期的未执行任务。未知 / 不可用平台、预览排期与旧文章定时参数继续明确拒绝，不会自动改成立即发布。
 
 ```bash
 sau douyin upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --schedule "2026-03-24 21:30"

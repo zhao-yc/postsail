@@ -58,6 +58,14 @@ class ArticleStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as conn:
             conn.executescript(SCHEMA)
+        # BEGIN IMMEDIATE 保护并发启动时的增量迁移，旧任务默认为立即发布。
+        with self.connect(write=True) as conn:
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(article_publish_tasks)")}
+            for name, declaration in (("scheduled_at", "TEXT"), ("schedule_timezone", "TEXT NOT NULL DEFAULT ''"),
+                                      ("schedule_revision", "INTEGER NOT NULL DEFAULT 0")):
+                if name not in columns:
+                    conn.execute(f"ALTER TABLE article_publish_tasks ADD COLUMN {name} {declaration}")
+            conn.execute("CREATE INDEX IF NOT EXISTS article_task_schedule ON article_publish_tasks(status,scheduled_at)")
 
     @contextmanager
     def connect(self, write=False):
