@@ -19,6 +19,7 @@ from .model import (ArticleError, PLATFORMS, clean_content, image_references, va
                     validate_option_asset, validate_title_characters)
 from .store import ArticleStore, encode
 from .scheduling import normalize_schedule, supports_server_schedule
+from .task_center import TaskCenterMixin
 from utils.account_bindings import AccountBindingError, account_identity, require_account_platform
 
 BLOCK_DUPLICATES = {"scheduled", "queued", "running", "needs_action", "submitted", "published", "unknown"}
@@ -64,7 +65,7 @@ class ResolveImages(HTMLParser):
         self.output.append(html.escape(data, quote=False))
 
 
-class ArticleService:
+class ArticleService(TaskCenterMixin):
     """每个后端实例持有一个服务，SQLite 租约保证文章全局串行执行。"""
 
     def __init__(self, db_path, asset_dir, cookie_dir, evidence_dir, *, runner=None, max_asset_bytes=20*1024*1024):
@@ -356,11 +357,11 @@ class ArticleService:
                             raise ArticleError("该文章修订在所选账号已有发布或待确认任务，请查看原任务", 409)
                     conn.execute("""INSERT INTO article_publish_tasks
                         (id,batch_id,article_id,revision,platform,account_id,mode,snapshot_json,status,stage,message,created_at,updated_at,
-                         scheduled_at,schedule_timezone)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                         scheduled_at,schedule_timezone,snapshot_title)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (task_id, batch_id, article_id, revision, platform, account_id, mode,
                          encode(snapshot), status, "validation" if status == "failed" else status, message, now, now,
-                         scheduled_at, zone))
+                         scheduled_at, zone, snapshot["title"]))
                     refs = [img.get("data-asset-id") for img in image_references(snapshot["content_html"])]
                     refs.extend(option_asset_ids(platform, snapshot["options"]).values())
                     self.store.refs(conn, "task", task_id, refs + [snapshot.get("cover_asset_id")])
@@ -372,6 +373,7 @@ class ArticleService:
         """任务只公开进度与证据，Cookie 和内部快照不会进入 API 响应。"""
         result = dict(row)
         result.pop("snapshot_json", None)
+        result.pop("snapshot_title", None)
         result["evidence"] = [f"/api/article-publish-tasks/{row['id']}/evidence/{Path(name).name}"
                               for name in json.loads(result.pop("evidence_json"))]
         result["retry_allowed"] = row["status"] in {"failed", "needs_action"} and not row["submit_started"] and row["stage"] != "validation"

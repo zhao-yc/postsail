@@ -3,6 +3,10 @@
     <div class="page-header">
       <h1>账号管理</h1>
     </div>
+    <el-alert v-if="route.query.account_id" :title="focusedAccount ? `发布任务关联账号：${focusedAccount.name}（#${focusedAccount.id}）` : '任务关联账号尚未找到，请刷新账号列表或重新添加。'" type="info" :closable="false" class="task-account-hint">
+      <el-button v-if="focusedAccount" text type="primary" :disabled="focusedAccount.needsConfirmation || Boolean(ACCOUNT_UNAVAILABLE_REASONS[focusedAccount.type])" @click="handleReLogin(focusedAccount)">重新登录此账号</el-button>
+      <el-button text @click="router.replace({ query: { ...route.query, account_id: undefined } })">显示全部账号</el-button>
+    </el-alert>
     
     <div class="account-tabs">
       <el-tabs v-model="activeTab" class="account-tabs-nav">
@@ -847,6 +851,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { Refresh, CircleCheckFilled, CircleCloseFilled, Download, Upload, Loading, Monitor } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { accountApi } from '@/api/account'
@@ -856,6 +861,9 @@ import { http } from '@/utils/request'
 
 // 获取账号状态管理
 const accountStore = useAccountStore()
+const route = useRoute()
+const router = useRouter()
+const focusedAccount = computed(() => accountStore.accounts.find((account) => String(account.id) === route.query.account_id))
 // 获取应用状态管理
 const appStore = useAppStore()
 
@@ -1027,6 +1035,7 @@ const handleStatusClick = (row) => {
 
 // 过滤后的账号列表
 const filteredAccounts = computed(() => {
+  if (activeTab.value === 'all' && focusedAccount.value && !searchKeyword.value) return [focusedAccount.value]
   if (!searchKeyword.value) return accountStore.accounts
   return accountStore.accounts.filter(account =>
     account.name.includes(searchKeyword.value)
@@ -1527,6 +1536,7 @@ onBeforeUnmount(() => {
 
 <style lang="scss" scoped>
 @use '@/styles/variables.scss' as *;
+.task-account-hint { margin-bottom: 16px; }
 
 @keyframes rotate {
   from {

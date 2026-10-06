@@ -35,11 +35,14 @@ request.interceptors.response.use(
     if (data.code === 200 || data.success) {
       return data
     } else {
+      if (response.config.silent) return Promise.reject(new Error(data.msg || data.message || '请求失败'))
       ElMessage.error(data.msg || data.message || '请求失败')
       return Promise.reject(new Error(data.msg || data.message || '请求失败'))
     }
   },
   (error) => {
+    // 后台提醒轮询在自己的入口显示错误，避免断网时不断弹出提示。
+    if (error.config?.silent) return Promise.reject(error)
     // 禁止输出 Axios 请求配置，避免把 Cookie、机器人地址和密钥留在日志中。
     console.error('请求失败:', { status: error.response?.status, code: error.code })
     

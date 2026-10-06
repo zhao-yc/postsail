@@ -252,8 +252,8 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { onBeforeRouteLeave } from 'vue-router'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Close, Picture, Plus, UploadFilled } from '@element-plus/icons-vue'
 import { EditorContent, useEditor } from '@tiptap/vue-3'
@@ -263,6 +263,8 @@ import { TableKit } from '@tiptap/extension-table'
 import { articleUrl, articlesApi } from '@/api/articles'
 import PublicationSchedule from '@/components/articles/PublicationSchedule.vue'
 import { defaultSchedule, formatSchedule, scheduleForTask, schedulePayload } from '@/utils/articleSchedule'
+const route = useRoute()
+const router = useRouter()
 
 const articles = ref([])
 const accounts = ref([])
@@ -502,7 +504,8 @@ function loadArticle(article) {
   revisionConflict.value = false
 }
 async function openArticle(id) {
-  if (id === form.id || !(await confirmDiscard())) return
+  if (id === form.id) return true
+  if (!(await confirmDiscard())) return false
   const sequence = ++loadSequence
   try {
     const response = await articlesApi.get(id)
@@ -513,7 +516,11 @@ async function openArticle(id) {
     Object.keys(targetConfigs).forEach((key) => delete targetConfigs[key])
     Object.keys(targetSchedules).forEach((key) => delete targetSchedules[key])
     await refreshBatches()
-  } catch { /* 请求拦截器统一展示错误，当前稿件保持不变。 */ }
+    return true
+  } catch {
+    // 请求拦截器统一展示错误，当前稿件保持不变。
+    return false
+  }
 }
 async function reloadArticle() {
   if (!form.id || !(await confirmDiscard())) return
@@ -756,6 +763,12 @@ async function resolveTask() {
 }
 function beforeUnload(event) { if (dirty.value) { event.preventDefault(); event.returnValue = '' } }
 onBeforeRouteLeave(() => confirmDiscard())
+watch(() => route.query.article_id, async (id) => {
+  if (typeof id === 'string' && id && !initialLoading.value) {
+    const opened = await openArticle(id)
+    if (opened === false && route.query.article_id === id) router.replace({ query: { ...route.query, article_id: form.id || undefined } })
+  }
+})
 onMounted(async () => {
   window.addEventListener('beforeunload', beforeUnload)
   try {
@@ -763,7 +776,8 @@ onMounted(async () => {
     articles.value = articleResponse.data.items || articleResponse.data || []
     accounts.value = accountResponse.data.items || accountResponse.data || []
     capabilities.value = capabilityResponse.data.platforms || []
-    if (articles.value.length) { const response = await articlesApi.get(articles.value[0].id); loadArticle(response.data); await refreshBatches() }
+    const requestedId = typeof route.query.article_id === 'string' && route.query.article_id ? route.query.article_id : articles.value[0]?.id
+    if (requestedId) { const response = await articlesApi.get(requestedId); loadArticle(response.data); await refreshBatches() }
     await refreshPending()
     pollingTimer = window.setInterval(() => {
       if (document.hidden) return

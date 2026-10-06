@@ -42,6 +42,29 @@ CREATE INDEX IF NOT EXISTS article_task_duplicate ON article_publish_tasks(artic
 CREATE TABLE IF NOT EXISTS article_worker_lease (
  id INTEGER PRIMARY KEY CHECK(id=1), owner TEXT NOT NULL, expires_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS article_task_notifications (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, status TEXT NOT NULL,
+ message TEXT NOT NULL, attempts INTEGER NOT NULL, created_at TEXT NOT NULL,
+ read_at TEXT, resolved_at TEXT
+);
+CREATE INDEX IF NOT EXISTS article_notification_unread ON article_task_notifications(resolved_at,read_at,id);
+CREATE INDEX IF NOT EXISTS article_notification_task ON article_task_notifications(task_id,id);
+CREATE TABLE IF NOT EXISTS article_task_center_migrations (id INTEGER PRIMARY KEY CHECK(id=1));
+CREATE TRIGGER IF NOT EXISTS article_notification_insert AFTER INSERT ON article_publish_tasks
+WHEN NEW.status IN ('failed','needs_action','unknown') AND NEW.stage != 'resolved'
+BEGIN
+ INSERT INTO article_task_notifications(task_id,status,message,attempts,created_at)
+ VALUES(NEW.id,NEW.status,NEW.message,NEW.attempts,NEW.updated_at);
+END;
+CREATE TRIGGER IF NOT EXISTS article_notification_update AFTER UPDATE OF status ON article_publish_tasks
+WHEN OLD.status != NEW.status OR OLD.attempts != NEW.attempts
+BEGIN
+ UPDATE article_task_notifications SET resolved_at=NEW.updated_at
+ WHERE task_id=NEW.id AND resolved_at IS NULL;
+ INSERT INTO article_task_notifications(task_id,status,message,attempts,created_at)
+ SELECT NEW.id,NEW.status,NEW.message,NEW.attempts,NEW.updated_at
+ WHERE NEW.status IN ('failed','needs_action','unknown') AND NEW.stage != 'resolved';
+END;
 """
 
 
@@ -51,7 +74,7 @@ def encode(value) -> str:
 
 
 class ArticleStore:
-    """初始化只增加新表，禁止重建已有账号或素材表。"""
+    """初始化增量增加表和字段，禁止重建已有账号或素材表。"""
 
     def __init__(self, db_path: Path):
         self.db_path = Path(db_path)
@@ -62,10 +85,24 @@ class ArticleStore:
         with self.connect(write=True) as conn:
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(article_publish_tasks)")}
             for name, declaration in (("scheduled_at", "TEXT"), ("schedule_timezone", "TEXT NOT NULL DEFAULT ''"),
-                                      ("schedule_revision", "INTEGER NOT NULL DEFAULT 0")):
+                                      ("schedule_revision", "INTEGER NOT NULL DEFAULT 0"),
+                                      ("snapshot_title", "TEXT NOT NULL DEFAULT ''")):
                 if name not in columns:
                     conn.execute(f"ALTER TABLE article_publish_tasks ADD COLUMN {name} {declaration}")
+            if "snapshot_title" not in columns:
+                # 不依赖可选的 SQLite JSON 扩展，兼容已有安装的数据库。
+                cursor = conn.execute("SELECT id,snapshot_json FROM article_publish_tasks")
+                while rows := cursor.fetchmany(100):
+                    conn.executemany("UPDATE article_publish_tasks SET snapshot_title=? WHERE id=?",
+                                     [(json.loads(row["snapshot_json"]).get("title", ""), row["id"]) for row in rows])
             conn.execute("CREATE INDEX IF NOT EXISTS article_task_schedule ON article_publish_tasks(status,scheduled_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS article_task_updated ON article_publish_tasks(updated_at,id)")
+            if not conn.execute("SELECT 1 FROM article_task_center_migrations WHERE id=1").fetchone():
+                conn.execute("""INSERT INTO article_task_notifications(task_id,status,message,attempts,created_at)
+                    SELECT id,status,message,attempts,updated_at FROM article_publish_tasks t
+                    WHERE status IN ('failed','needs_action','unknown') AND stage != 'resolved'
+                    AND NOT EXISTS (SELECT 1 FROM article_task_notifications n WHERE n.task_id=t.id)""")
+                conn.execute("INSERT INTO article_task_center_migrations VALUES(1)")
 
     @contextmanager
     def connect(self, write=False):

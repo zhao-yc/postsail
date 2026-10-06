@@ -36,6 +36,10 @@
               <el-icon><Document /></el-icon>
               <span>文章工作台</span>
             </el-menu-item>
+            <el-menu-item index="/article-tasks">
+              <el-icon><List /></el-icon>
+              <span>任务中心</span>
+            </el-menu-item>
             <el-menu-item index="/data-center">
               <el-icon><DataLine /></el-icon>
               <span>数据中心</span>
@@ -58,7 +62,7 @@
               <button class="toggle-sidebar" type="button" aria-label="切换侧边栏" @click="toggleSidebar"><el-icon><Fold /></el-icon></button>
             </div>
             <div class="header-right">
-              <!-- 账号信息已移除 -->
+              <ArticleTaskAlerts />
             </div>
           </div>
         </el-header>
@@ -75,8 +79,9 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   HomeFilled, User, DataLine, InfoFilled,
-  Fold, Picture, Upload, Document, ChatDotRound
+  Fold, Picture, Upload, Document, ChatDotRound, List
 } from '@element-plus/icons-vue'
+import ArticleTaskAlerts from '@/components/articles/ArticleTaskAlerts.vue'
 
 const route = useRoute()
 

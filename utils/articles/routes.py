@@ -114,7 +114,28 @@ def register_article_routes(app, configuration):
 
     @bp.route("/api/article-publish-tasks")
     def pending_tasks():
+        scope = request.args.get("scope", "pending")
+        if scope == "all":
+            return response(service().all_tasks(request.args))
+        if scope != "pending":
+            raise ArticleError("scope 必须为 pending 或 all")
         return response(service().pending_tasks(request.args.get("page", 1), request.args.get("page_size", 50)))
+
+    @bp.get("/api/article-publish-tasks/<task_id>")
+    def task_item(task_id):
+        return response(service().get_task(task_id))
+
+    @bp.get("/api/article-task-notifications")
+    def task_notifications():
+        return response(service().task_notifications(request.args.get("page", 1), request.args.get("page_size", 20)))
+
+    @bp.post("/api/article-task-notifications/<int:notification_id>/read")
+    def read_task_notification(notification_id):
+        return response(service().read_task_notification(notification_id), "提醒已读，任务状态保留")
+
+    @bp.post("/api/article-task-notifications/read")
+    def read_task_notifications():
+        return response(service().read_task_notifications(payload()), "已观察到的提醒已标记为已读")
 
     @bp.route("/api/article-publish-tasks/<task_id>/schedule", methods=["PATCH"])
     def reschedule(task_id):

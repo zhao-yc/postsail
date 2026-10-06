@@ -11,7 +11,7 @@ export const articleUrl = (path) => {
 // 文章工作台与 CLI 使用相同协议，沿用现有请求拦截器及登录凭据。
 export const articlesApi = {
   list: () => request.get(articleUrl('/api/articles')),
-  get: (id) => request.get(articleUrl(`/api/articles/${id}`)),
+  get: (id) => request.get(articleUrl(`/api/articles/${encodeURIComponent(id)}`)),
   create: (data) => request.post(articleUrl('/api/articles'), data),
   update: (id, data) => request.patch(articleUrl(`/api/articles/${id}`), data),
   capabilities: () => request.get(articleUrl('/api/article-capabilities')),
@@ -31,6 +31,11 @@ export const articlesApi = {
   batch: (id) => request.get(articleUrl(`/api/article-publish-batches/${id}`)),
   retry: (id) => request.post(articleUrl(`/api/article-publish-tasks/${id}/retry`), {}),
   pending: (page = 1, pageSize = 20) => request.get(articleUrl('/api/article-publish-tasks'), { params: { page, page_size: pageSize } }),
+  tasks: (params) => request.get(articleUrl('/api/article-publish-tasks'), { params: { ...params, scope: 'all' }, silent: true }),
+  task: (id) => request.get(articleUrl(`/api/article-publish-tasks/${encodeURIComponent(id)}`), { silent: true }),
+  taskNotifications: (params = {}) => request.get(articleUrl('/api/article-task-notifications'), { params, silent: true }),
+  readTaskNotification: (id) => request.post(articleUrl(`/api/article-task-notifications/${id}/read`), {}),
+  readTaskNotifications: (throughId) => request.post(articleUrl('/api/article-task-notifications/read'), { through_id: throughId }),
   reschedule: (id, data) => request.patch(articleUrl(`/api/article-publish-tasks/${id}/schedule`), data),
   cancel: (id, revision) => request.post(articleUrl(`/api/article-publish-tasks/${id}/cancel`), { expected_schedule_revision: revision }),
   resolve: (id, data) => request.post(articleUrl(`/api/article-publish-tasks/${id}/resolve`), data)

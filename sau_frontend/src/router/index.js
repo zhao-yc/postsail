@@ -4,6 +4,7 @@ import AccountManagement from '../views/AccountManagement.vue'
 import MaterialManagement from '../views/MaterialManagement.vue'
 import PublishCenter from '../views/PublishCenter.vue'
 import ArticleManagement from '../views/ArticleManagement.vue'
+import ArticleTaskCenter from '../views/ArticleTaskCenter.vue'
 import DataCenter from '../views/DataCenter.vue'
 import AnalyticsCenter from '../views/AnalyticsCenter.vue'
 import MessageCenter from '../views/MessageCenter.vue'
@@ -34,6 +35,11 @@ const routes = [
     path: '/articles',
     name: 'ArticleManagement',
     component: ArticleManagement
+  },
+  {
+    path: '/article-tasks',
+    name: 'ArticleTaskCenter',
+    component: ArticleTaskCenter
   },
   {
     path: '/data-center',
